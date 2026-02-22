@@ -54,14 +54,13 @@ gandalf/
     main.go                        # Entrypoint: parse flags, call run()
     run.go                         # Wire deps, start server + workers, graceful shutdown
   internal/
-    gateway.go                     # Domain types: Provider, APIKey, Route, Usage, Message,
-                                   #   Organization, Team, User, Identity, Permission
+    gateway.go                     # Domain types, Authenticator interface, RBAC bitmask,
+                                   #   context helpers. No project imports.
     errors.go                      # Domain error types + sentinel errors
     auth/
-      auth.go                      # Authenticator interface, Identity type, dual-mode dispatcher
       apikey.go                    # API key auth: hash -> cache lookup -> DB fallback
-      jwt.go                       # JWT/OIDC auth: JWKS cache, token validation, claims extraction
-      rbac.go                      # Permission bitmask, role -> permissions map
+      jwt.go                       # (Phase 5) JWT/OIDC auth: JWKS cache, token validation
+      auth.go                      # (Phase 5) Dual-mode dispatcher: JWT first, API key fallback
       auth_test.go
     server/
       server.go                    # NewServer(deps) http.Handler -- Mat Ryer pattern
@@ -284,23 +283,23 @@ const (
 ```
 
 ```go
-// internal/auth/auth.go -- authenticator interface
+// internal/gateway.go -- authenticator interface (at domain root, no project imports)
 type Authenticator interface {
     // Authenticate extracts and validates credentials from the request.
     // Returns Identity on success. Tries JWT first, falls back to API key.
-    Authenticate(ctx context.Context, r *http.Request) (*gateway.Identity, error)
+    Authenticate(ctx context.Context, r *http.Request) (*Identity, error)
 }
 ```
 
 ```go
 // internal/storage/storage.go -- store interfaces, consumed by app/
 type APIKeyStore interface {
-    Create(ctx context.Context, key *gateway.APIKey) error
-    GetByHash(ctx context.Context, hash string) (*gateway.APIKey, error)
-    List(ctx context.Context, orgID string, offset, limit int) ([]*gateway.APIKey, error)
-    Update(ctx context.Context, key *gateway.APIKey) error
-    Delete(ctx context.Context, id string) error
-    IncrementUsage(ctx context.Context, id string, tokens int64) error
+    CreateKey(ctx context.Context, key *gateway.APIKey) error
+    GetKeyByHash(ctx context.Context, hash string) (*gateway.APIKey, error)
+    ListKeys(ctx context.Context, orgID string, offset, limit int) ([]*gateway.APIKey, error)
+    UpdateKey(ctx context.Context, key *gateway.APIKey) error
+    DeleteKey(ctx context.Context, id string) error
+    TouchKeyUsed(ctx context.Context, id string) error
 }
 
 type OrgStore interface {
@@ -675,23 +674,23 @@ DNS caching via `rs/dnscache` wrapped in `DialContext` -- avoids stale DNS after
 
 ## Dependencies
 
-| Package | Purpose | Rationale |
-|---------|---------|-----------|
-| `github.com/go-chi/chi/v5` | HTTP router + middleware composition | Subrouter grouping, 100% http.Handler compat, zero-alloc radix tree |
-| `modernc.org/sqlite` | Pure-Go SQLite (no CGO, static binary) | CGO_ENABLED=0, database/sql compat, WAL mode, actively maintained |
-| `github.com/pressly/goose/v3` | DB migrations | Embedded SQL migrations, database/sql driver-agnostic |
-| `github.com/maypok86/otter/v2` | In-memory cache (auth + response) | W-TinyLFU eviction, per-entry TTL, generics, ~300ns reads, no dropped writes |
-| `github.com/google/uuid` | UUID v7 request IDs | RFC 9562, `EnableRandPool()` reduces syscall overhead |
-| `go.yaml.in/yaml/v3` | YAML config parsing | Drop-in replacement for unmaintained `gopkg.in/yaml.v3` |
-| `github.com/pkoukk/tiktoken-go` | Token counting | cl100k_base + o200k_base, matches Python tiktoken exactly |
-| `golang.org/x/time/rate` | Token bucket rate limiting | Stdlib-adjacent, ~50ns Allow(), 0 allocs on hot path |
-| `github.com/prometheus/client_golang` | Prometheus metrics | Native histograms (atomic ops), pre-cached label children |
-| `go.opentelemetry.io/otel` + OTLP SDK | Distributed tracing | OTLP gRPC exporter (Jaeger exporter deprecated), ParentBased sampler |
-| `github.com/rs/zerolog` | Zero-alloc structured logging | 30 ns/op, 0 allocs; diode writer for non-blocking async writes |
-| `github.com/rs/dnscache` | DNS caching for upstream calls | Avoids DNS lookup per new connection to provider endpoints |
-| `golang.org/x/sync/singleflight` | Request coalescing | Dedup identical in-flight requests, stdlib-adjacent |
-| `github.com/tidwall/gjson` | Incremental JSON field extraction | ~1 alloc per field vs full unmarshal; SSE translation hot path |
-| `github.com/lestrrat-go/jwx/v2` | JWT validation + JWKS cache | Full JOSE stack, background JWKS auto-refresh, stale-on-failure |
+| Package | Purpose | Rationale | Phase |
+|---------|---------|-----------|-------|
+| `github.com/go-chi/chi/v5` | HTTP router + middleware composition | Subrouter grouping, 100% http.Handler compat, zero-alloc radix tree | 1 |
+| `modernc.org/sqlite` | Pure-Go SQLite (no CGO, static binary) | CGO_ENABLED=0, database/sql compat, WAL mode, actively maintained | 1 |
+| `github.com/pressly/goose/v3` | DB migrations | Embedded SQL migrations, database/sql driver-agnostic | 1 |
+| `github.com/maypok86/otter/v2` | In-memory cache (auth + response) | W-TinyLFU eviction, per-entry TTL, generics, ~300ns reads, no dropped writes | 1 |
+| `github.com/google/uuid` | UUID v7 request IDs | RFC 9562, `EnableRandPool()` reduces syscall overhead | 1 |
+| `go.yaml.in/yaml/v3` | YAML config parsing | Drop-in replacement for unmaintained `gopkg.in/yaml.v3` | 1 |
+| `github.com/pkoukk/tiktoken-go` | Token counting | cl100k_base + o200k_base, matches Python tiktoken exactly | 3 |
+| `golang.org/x/time/rate` | Token bucket rate limiting | Stdlib-adjacent, ~50ns Allow(), 0 allocs on hot path | 3 |
+| `github.com/prometheus/client_golang` | Prometheus metrics | Native histograms (atomic ops), pre-cached label children | 4 |
+| `go.opentelemetry.io/otel` + OTLP SDK | Distributed tracing | OTLP gRPC exporter (Jaeger exporter deprecated), ParentBased sampler | 4 |
+| `github.com/rs/zerolog` | Zero-alloc structured logging | 30 ns/op, 0 allocs; diode writer for non-blocking async writes | 4 |
+| `github.com/rs/dnscache` | DNS caching for upstream calls | Avoids DNS lookup per new connection to provider endpoints | 2 |
+| `golang.org/x/sync/singleflight` | Request coalescing | Dedup identical in-flight requests, stdlib-adjacent | 6 |
+| `github.com/tidwall/gjson` | Incremental JSON field extraction | ~1 alloc per field vs full unmarshal; SSE translation hot path | 2 |
+| `github.com/lestrrat-go/jwx/v2` | JWT validation + JWKS cache | Full JOSE stack, background JWKS auto-refresh, stale-on-failure | 5 |
 
 Stdlib: `net/http`, `database/sql`, `crypto/sha256`, `crypto/subtle`, `sync`, `context`, `encoding/json`, `bufio`.
 

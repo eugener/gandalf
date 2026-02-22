@@ -21,7 +21,7 @@ Hexagonal architecture. Domain types at `internal/gateway.go`, interfaces at con
 
 - `internal/gateway.go` -- domain types (Provider, ChatRequest/Response, APIKey, Identity, etc.) + Authenticator interface. No project imports.
 - `internal/errors.go` -- sentinel errors (ErrUnauthorized, ErrNotFound, ErrRateLimited, etc.)
-- `internal/auth/` -- API key auth with otter cache (30s TTL). JWT planned for later.
+- `internal/auth/` -- API key auth with otter cache (30s TTL), `subtle.ConstantTimeCompare` belt-and-suspenders on hash. JWT planned for later.
 - `internal/server/` -- HTTP handlers + middleware (chi). Routes wired inline in `server.go`.
 - `internal/app/` -- ProxyService (route resolve + provider call), RouterService, KeyManager (create/delete keys)
 - `internal/provider/` -- Registry (name->Provider map) + OpenAI adapter. Streaming/embeddings stubbed.
@@ -40,14 +40,14 @@ gandalf/
     gateway.go                     # Domain types + Authenticator interface
     errors.go                      # Sentinel errors
     auth/
-      auth.go                      # Authenticator dispatcher (delegates to APIKeyAuth)
       apikey.go                    # API key auth: hash -> otter cache -> DB fallback
     server/
       server.go                    # New(Deps) http.Handler, route registration (chi)
       proxy.go                     # handleChatCompletion + writeJSON + errorResponse helpers
       middleware.go                # recovery, requestID, logging, authenticate middleware
-      health.go                    # handleHealthz, handleReadyz
+      health.go                    # handleHealthz, handleReadyz (readyz pings DB via ReadyChecker)
       server_test.go               # Handler tests with inline fakes
+      server_bench_test.go         # Benchmarks: ChatCompletion, Healthz (alloc tracking)
     app/
       proxy.go                     # ProxyService: route resolve -> provider call
       router.go                    # RouterService: model alias -> provider/model resolution
@@ -59,7 +59,7 @@ gandalf/
     storage/
       storage.go                   # Store interfaces (APIKeyStore, ProviderStore, RouteStore, UsageStore, OrgStore)
       sqlite/
-        db.go                      # New(dsn): open DB, run migrations, read/write pools
+        db.go                      # New(dsn): open DB, run migrations, read/write pools, Ping()
         apikey.go                  # APIKeyStore impl + SQL helpers
         provider.go                # ProviderStore impl
         route.go                   # RouteStore impl
@@ -69,8 +69,6 @@ gandalf/
         migrations/
           001_init.sql             # Schema: organizations, teams, providers, api_keys, routes, usage_records
   configs/gandalf.yaml             # Example config with env var placeholders
-  deploy/
-    Dockerfile                     # Multi-stage build
   Makefile
   spec.md                          # Full multi-phase design spec
 ```
@@ -129,7 +127,7 @@ type Store interface {
 - Inline fakes in `_test.go` files (no separate testutil package yet)
 - Table-driven tests with `t.Parallel()`
 - SQLite: separate read/write pools, WAL mode, goose embedded migrations
-- Context helpers: `ContextWithIdentity`, `IdentityFromContext`, `ContextWithRequestID`
+- Context helpers: `ContextWithIdentity`, `IdentityFromContext`, `ContextWithRequestID`, `RequestIDFromContext`
 - RBAC defined as permission bitmask (`Identity.Can(p Permission) bool`), role mapping in `RolePermissions` var
 - Config supports `${ENV_VAR}` expansion in YAML
 - Bootstrap seeds providers/routes/keys from config on first run (idempotent)
@@ -152,7 +150,7 @@ type Store interface {
 |-------|----------|
 | `server/` | `httptest.NewRecorder` + inline fakes for auth/provider/store |
 | `storage/sqlite/` | Temp-file SQLite, full CRUD round-trip tests |
-| `config/` | Temp YAML files, env var expansion, default validation |
+| `config/` | Temp YAML files, env var expansion, default validation, bootstrap seed + idempotency |
 
 ## Future Phases
 
