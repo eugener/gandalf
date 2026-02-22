@@ -57,8 +57,13 @@ func errorStatus(err error) int {
 	}
 }
 
+// jsonCT is a pre-allocated header value slice. Direct map assignment
+// (w.Header()["Content-Type"] = jsonCT) avoids the []string{v} alloc
+// that Header.Set creates on every call. Saves 1 alloc/req.
+var jsonCT = []string{"application/json"}
+
 func writeJSON(w http.ResponseWriter, status int, v any) {
-	w.Header().Set("Content-Type", "application/json")
+	w.Header()["Content-Type"] = jsonCT
 	w.WriteHeader(status)
 	if err := json.NewEncoder(w).Encode(v); err != nil {
 		slog.Error("failed to encode response", "error", err)

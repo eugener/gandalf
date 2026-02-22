@@ -3,6 +3,7 @@ package server
 import (
 	"log/slog"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -10,12 +11,23 @@ import (
 	gateway "github.com/eugener/gandalf/internal"
 )
 
+// statusWriterPool eliminates 1 alloc/req from &statusWriter{} escaping to heap.
+// Reset fields on Get, nil ResponseWriter on Put to avoid retaining references.
+var statusWriterPool = sync.Pool{
+	New: func() any { return &statusWriter{} },
+}
+
 // recovery catches panics and returns 500.
 func (s *server) recovery(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer func() {
 			if rec := recover(); rec != nil {
-				slog.Error("panic recovered", "error", rec, "path", r.URL.Path)
+				// LogAttrs with typed attrs keeps values on the stack (~2 fewer
+				// allocs vs slog.Error which boxes every key+value into any).
+				slog.LogAttrs(r.Context(), slog.LevelError, "panic recovered",
+					slog.Any("error", rec),
+					slog.String("path", r.URL.Path),
+				)
 				writeJSON(w, http.StatusInternalServerError, errorResponse("internal server error"))
 			}
 		}()
@@ -23,14 +35,21 @@ func (s *server) recovery(next http.Handler) http.Handler {
 	})
 }
 
+// requestIDHeader uses the canonical MIME form so direct map access
+// (r.Header[key], w.Header()[key] = ...) skips textproto.CanonicalMIMEHeaderKey,
+// saving 2 allocs/req that Header.Get/Set would otherwise spend on canonicalization.
+const requestIDHeader = "X-Request-Id"
+
 // requestID adds a UUID v7 request ID to the context and response header.
 func (s *server) requestID(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		id := r.Header.Get("X-Request-ID")
-		if id == "" {
+		var id string
+		if vals := r.Header[requestIDHeader]; len(vals) > 0 {
+			id = vals[0]
+		} else {
 			id = uuid.Must(uuid.NewV7()).String()
 		}
-		w.Header().Set("X-Request-ID", id)
+		w.Header()[requestIDHeader] = []string{id}
 		ctx := gateway.ContextWithRequestID(r.Context(), id)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
@@ -40,15 +59,22 @@ func (s *server) requestID(next http.Handler) http.Handler {
 func (s *server) logging(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
-		sw := &statusWriter{ResponseWriter: w, status: http.StatusOK}
+		sw := statusWriterPool.Get().(*statusWriter)
+		sw.ResponseWriter = w
+		sw.status = http.StatusOK
+		sw.wroteHeader = false
 		next.ServeHTTP(sw, r)
-		slog.Info("request",
-			"method", r.Method,
-			"path", r.URL.Path,
-			"status", sw.status,
-			"duration_ms", time.Since(start).Milliseconds(),
-			"request_id", gateway.RequestIDFromContext(r.Context()),
+		// LogAttrs with typed slog.String/Int/Int64 keeps attrs as stack values,
+		// saving ~5 allocs/req vs slog.Info which boxes every key+value into any.
+		slog.LogAttrs(r.Context(), slog.LevelInfo, "request",
+			slog.String("method", r.Method),
+			slog.String("path", r.URL.Path),
+			slog.Int("status", sw.status),
+			slog.Int64("duration_ms", time.Since(start).Milliseconds()),
+			slog.String("request_id", gateway.RequestIDFromContext(r.Context())),
 		)
+		sw.ResponseWriter = nil
+		statusWriterPool.Put(sw)
 	})
 }
 

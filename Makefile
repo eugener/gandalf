@@ -14,7 +14,10 @@ test:
 	go test -race -count=1 ./...
 
 bench:
-	go test -bench=. -benchmem ./...
+	@go test -run='^$$' -bench=. -benchmem ./internal/server/ | awk '/^Benchmark/ { \
+		name=$$1; sub(/-[0-9]+$$/, "", name); sub(/^Benchmark/, "", name); \
+		rps=int(1000000000/$$3); \
+		printf "%-28s %8s ns/op  %6d rps  %8s B/op  %4s allocs/op\n", name, $$3, rps, $$5, $$7 }'
 
 lint:
 	go vet ./...
