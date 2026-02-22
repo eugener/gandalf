@@ -17,7 +17,15 @@ func (s *server) handleHealthz(w http.ResponseWriter, _ *http.Request) {
 	w.Write(okBody)
 }
 
-func (s *server) handleReadyz(w http.ResponseWriter, _ *http.Request) {
+func (s *server) handleReadyz(w http.ResponseWriter, r *http.Request) {
+	if s.deps.ReadyCheck != nil {
+		if err := s.deps.ReadyCheck(r.Context()); err != nil {
+			w.Header()["Content-Type"] = plainCT
+			w.WriteHeader(http.StatusServiceUnavailable)
+			w.Write([]byte("not ready"))
+			return
+		}
+	}
 	w.Header()["Content-Type"] = plainCT
 	w.WriteHeader(http.StatusOK)
 	w.Write(okBody)

@@ -67,9 +67,10 @@ func run(configPath string) error {
 
 	// Create HTTP server
 	handler := server.New(server.Deps{
-		Auth:  apiKeyAuth,
-		Proxy: proxySvc,
-		Keys:  keys,
+		Auth:       apiKeyAuth,
+		Proxy:      proxySvc,
+		Keys:       keys,
+		ReadyCheck: store.Ping,
 	})
 
 	srv := &http.Server{

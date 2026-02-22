@@ -4,6 +4,7 @@ package auth
 
 import (
 	"context"
+	"crypto/subtle"
 	"errors"
 	"fmt"
 	"net/http"
@@ -72,6 +73,13 @@ func (a *APIKeyAuth) Authenticate(ctx context.Context, r *http.Request) (*gatewa
 			return nil, gateway.ErrUnauthorized
 		}
 		return nil, err
+	}
+
+	// Belt-and-suspenders: constant-time comparison of the stored hash against
+	// the computed hash. The DB lookup already matched, but this guards against
+	// hypothetical SQL collation or encoding surprises.
+	if subtle.ConstantTimeCompare([]byte(key.KeyHash), []byte(hash)) != 1 {
+		return nil, gateway.ErrUnauthorized
 	}
 
 	if key.Blocked {

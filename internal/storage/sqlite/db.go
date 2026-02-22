@@ -72,6 +72,11 @@ func runMigrations(db *sql.DB) error {
 	return err
 }
 
+// Ping verifies database connectivity by pinging the read pool.
+func (s *Store) Ping(ctx context.Context) error {
+	return s.read.PingContext(ctx)
+}
+
 // Close closes both database connections.
 func (s *Store) Close() error {
 	return errors.Join(s.write.Close(), s.read.Close())

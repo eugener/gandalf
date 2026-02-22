@@ -34,7 +34,7 @@ func (km *KeyManager) CreateKey(ctx context.Context, orgID, name, role string) (
 	hash := gateway.HashKey(plaintext)
 
 	key := &gateway.APIKey{
-		ID:        uuid.New().String(),
+		ID:        uuid.Must(uuid.NewV7()).String(),
 		KeyHash:   hash,
 		KeyPrefix: plaintext[:8],
 		OrgID:     orgID,

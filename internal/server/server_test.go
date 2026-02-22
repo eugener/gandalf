@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -138,6 +139,44 @@ type rejectAuth struct{}
 
 func (rejectAuth) Authenticate(context.Context, *http.Request) (*gateway.Identity, error) {
 	return nil, gateway.ErrUnauthorized
+}
+
+func TestReadyz(t *testing.T) {
+	t.Parallel()
+	h := newTestHandler()
+
+	req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	if rec.Body.String() != "ok" {
+		t.Errorf("body = %q, want %q", rec.Body.String(), "ok")
+	}
+}
+
+func TestReadyzFailing(t *testing.T) {
+	t.Parallel()
+
+	reg := provider.NewRegistry()
+	routerSvc := app.NewRouterService(&fakeRouteStore{})
+	h := New(Deps{
+		Auth:  fakeAuth{},
+		Proxy: app.NewProxyService(reg, routerSvc),
+		ReadyCheck: func(context.Context) error {
+			return errors.New("db down")
+		},
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusServiceUnavailable)
+	}
 }
 
 func TestRequestIDHeader(t *testing.T) {
