@@ -1,0 +1,33 @@
+# Binaries
+/gandalf
+/bin/
+*.exe
+
+# Test
+coverage.out
+*.test
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+.env.*
+
+# Data
+*.db
+*.db-wal
+*.db-shm
+
+# Tiktoken cache
+.tiktoken_cache/
+
+# Build
+/dist/
