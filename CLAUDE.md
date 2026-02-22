@@ -5,12 +5,15 @@
 ```bash
 make build          # build binary
 make test           # run tests with race detector
-make check          # full verification: build + fix + vet + test + govulncheck
+make bench          # benchmarks with ns/op, rps, allocs
+make check          # full verification: build + fix + vet + test + govulncheck + bench
 make lint           # go vet + golangci-lint
 make run            # build and run with example config
 make docker         # build Docker image
 make coverage       # test coverage report
 ```
+
+**Always run `make bench` after server changes and verify alloc counts stay low.**
 
 ## Architecture
 
