@@ -252,31 +252,52 @@ type UsageRecord struct {
 
 type contextKey int
 
-const (
-	ctxKeyIdentity contextKey = iota
-	ctxKeyRequestID
-)
+const ctxKeyMeta contextKey = 0
+
+// requestMeta bundles per-request values into a single context allocation.
+// The Identity field is set later by the authenticate middleware via mutation
+// of the same pointer, avoiding a second context.WithValue + Request.WithContext.
+type requestMeta struct {
+	RequestID string
+	Identity  *Identity
+}
+
+// metaFromContext returns the requestMeta stored in ctx, or nil.
+func metaFromContext(ctx context.Context) *requestMeta {
+	m, _ := ctx.Value(ctxKeyMeta).(*requestMeta)
+	return m
+}
 
 // IdentityFromContext extracts the authenticated identity from context.
 func IdentityFromContext(ctx context.Context) *Identity {
-	id, _ := ctx.Value(ctxKeyIdentity).(*Identity)
-	return id
+	if m := metaFromContext(ctx); m != nil {
+		return m.Identity
+	}
+	return nil
 }
 
-// ContextWithIdentity returns a context carrying the given identity.
+// ContextWithIdentity stores the identity in the existing requestMeta if present,
+// avoiding a new context.WithValue allocation. Falls back to creating new metadata
+// if none exists (e.g., in tests).
 func ContextWithIdentity(ctx context.Context, id *Identity) context.Context {
-	return context.WithValue(ctx, ctxKeyIdentity, id)
+	if m := metaFromContext(ctx); m != nil {
+		m.Identity = id
+		return ctx
+	}
+	return context.WithValue(ctx, ctxKeyMeta, &requestMeta{Identity: id})
 }
 
 // RequestIDFromContext extracts the request ID from context.
 func RequestIDFromContext(ctx context.Context) string {
-	s, _ := ctx.Value(ctxKeyRequestID).(string)
-	return s
+	if m := metaFromContext(ctx); m != nil {
+		return m.RequestID
+	}
+	return ""
 }
 
 // ContextWithRequestID returns a context carrying the given request ID.
 func ContextWithRequestID(ctx context.Context, id string) context.Context {
-	return context.WithValue(ctx, ctxKeyRequestID, id)
+	return context.WithValue(ctx, ctxKeyMeta, &requestMeta{RequestID: id})
 }
 
 // --- Shared constants and helpers ---

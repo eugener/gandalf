@@ -5,21 +5,35 @@ import (
 	"encoding/json"
 	"fmt"
 	"slices"
+	"time"
+
+	"github.com/maypok86/otter/v2"
 
 	gateway "github.com/eugener/gandalf/internal"
 	"github.com/eugener/gandalf/internal/storage"
 )
 
 // RouterService resolves model aliases to concrete provider/model pairs
-// using the route store.
+// using the route store. Resolved targets are cached to avoid repeated
+// JSON unmarshalling on the hot path.
 type RouterService struct {
 	routeStore storage.RouteStore
+	cache      *otter.Cache[string, []ResolvedTarget]
 }
 
 // NewRouterService returns a RouterService backed by the given route store.
 func NewRouterService(routes storage.RouteStore) *RouterService {
-	return &RouterService{routeStore: routes}
+	cache := otter.Must(&otter.Options[string, []ResolvedTarget]{
+		MaximumSize:      256,
+		ExpiryCalculator: otter.ExpiryWriting[string, []ResolvedTarget](routeCacheTTL),
+	})
+	return &RouterService{routeStore: routes, cache: cache}
 }
+
+// routeCacheTTL is how long resolved targets stay cached before re-reading
+// from the store. Short enough to pick up config changes quickly, long enough
+// to eliminate per-request JSON parsing.
+const routeCacheTTL = 10 * time.Second
 
 // ResolvedTarget is a provider/model pair with a priority for failover ordering.
 type ResolvedTarget struct {
@@ -30,11 +44,17 @@ type ResolvedTarget struct {
 
 // ResolveModel maps a model alias to an ordered list of targets sorted by
 // priority (ascending). If no route is found, a single target defaulting to
-// "openai" with the original model name is returned.
+// "openai" with the original model name is returned. Results are cached to
+// avoid per-request JSON parsing.
 func (rs *RouterService) ResolveModel(ctx context.Context, model string) ([]ResolvedTarget, error) {
+	if cached, ok := rs.cache.GetIfPresent(model); ok {
+		return cached, nil
+	}
+
 	route, err := rs.routeStore.GetRouteByAlias(ctx, model)
 	if err != nil {
 		// No configured route -- fall through to direct pass-through.
+		// Don't cache misses since the route may be added later.
 		return []ResolvedTarget{{ProviderID: "openai", Model: model, Priority: 1}}, nil //nolint:nilerr
 	}
 
@@ -60,5 +80,6 @@ func (rs *RouterService) ResolveModel(ctx context.Context, model string) ([]Reso
 		return a.Priority - b.Priority
 	})
 
+	rs.cache.Set(model, resolved)
 	return resolved, nil
 }

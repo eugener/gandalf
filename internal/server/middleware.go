@@ -79,6 +79,8 @@ func (s *server) logging(next http.Handler) http.Handler {
 }
 
 // authenticate validates credentials and injects Identity into context.
+// When requestMeta already exists in context (set by requestID middleware),
+// the identity is stored by mutation -- no new context or request copy needed.
 func (s *server) authenticate(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		identity, err := s.deps.Auth.Authenticate(r.Context(), r)
@@ -88,7 +90,12 @@ func (s *server) authenticate(next http.Handler) http.Handler {
 			return
 		}
 		ctx := gateway.ContextWithIdentity(r.Context(), identity)
-		next.ServeHTTP(w, r.WithContext(ctx))
+		if ctx == r.Context() {
+			// Identity was stored via pointer mutation; skip Request.WithContext.
+			next.ServeHTTP(w, r)
+		} else {
+			next.ServeHTTP(w, r.WithContext(ctx))
+		}
 	})
 }
 

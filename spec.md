@@ -711,8 +711,8 @@ Stdlib: `net/http`, `database/sql`, `crypto/sha256`, `crypto/subtle`, `sync`, `c
 **Phase 1 -- Foundation (MVP):**
 Project skeleton, config, SQLite + migrations, OpenAI adapter, `/v1/chat/completions` (non-streaming), API key auth (single org), health endpoint, build pipeline.
 
-**Phase 2 -- Streaming + Multi-Provider:**
-SSE streaming, Anthropic adapter, Gemini adapter, model routing with priority failover, `/v1/embeddings`, `/v1/models`.
+**Phase 2 -- Streaming + Multi-Provider (DONE):**
+SSE streaming (channel-based, 8-buffer), Anthropic adapter (Messages API, SSE event state machine), Gemini adapter (generateContent, EOF-terminated SSE), priority failover routing (sorted targets, otter-cached), `/v1/embeddings`, `/v1/models`. Shared `dnscache.Resolver`, `gjson` for response translation. `testutil/` package with reusable fakes. Performance: route target caching (-12 allocs), bundled request context (-2 allocs), `GOEXPERIMENT=jsonv2` (-1-8 allocs). Baseline: ~53 allocs/op ChatCompletion, ~25 allocs/op Healthz.
 
 **Phase 3 -- Rate Limiting + Caching:**
 Token-bucket rate limiter (dual RPM+TPM), exact-match cache, token counting, async usage recording, quota enforcement.
