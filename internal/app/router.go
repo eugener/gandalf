@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 
 	gateway "github.com/eugener/gandalf/internal"
 	"github.com/eugener/gandalf/internal/storage"
@@ -20,24 +21,44 @@ func NewRouterService(routes storage.RouteStore) *RouterService {
 	return &RouterService{routeStore: routes}
 }
 
-// ResolveModel maps a model alias to a provider name and actual model ID.
-// If no route is found, the alias is treated as a direct OpenAI model name.
-func (rs *RouterService) ResolveModel(ctx context.Context, model string) (providerName, actualModel string, err error) {
+// ResolvedTarget is a provider/model pair with a priority for failover ordering.
+type ResolvedTarget struct {
+	ProviderID string
+	Model      string
+	Priority   int
+}
+
+// ResolveModel maps a model alias to an ordered list of targets sorted by
+// priority (ascending). If no route is found, a single target defaulting to
+// "openai" with the original model name is returned.
+func (rs *RouterService) ResolveModel(ctx context.Context, model string) ([]ResolvedTarget, error) {
 	route, err := rs.routeStore.GetRouteByAlias(ctx, model)
 	if err != nil {
-		// Treat all lookup failures as "no configured route" and fall through
-		// to direct pass-through. Covers ErrNotFound (expected) and transient
-		// DB errors (best-effort: prefer forwarding over failing the request).
-		return "openai", model, nil //nolint:nilerr
+		// No configured route -- fall through to direct pass-through.
+		return []ResolvedTarget{{ProviderID: "openai", Model: model, Priority: 1}}, nil //nolint:nilerr
 	}
 
 	var targets []gateway.RouteTarget
 	if err := json.Unmarshal(route.Targets, &targets); err != nil {
-		return "", "", fmt.Errorf("parse route targets: %w", err)
+		return nil, fmt.Errorf("parse route targets: %w", err)
 	}
 	if len(targets) == 0 {
-		return "", "", fmt.Errorf("route %q has no targets", model)
+		return nil, fmt.Errorf("route %q has no targets", model)
 	}
 
-	return targets[0].ProviderID, targets[0].Model, nil
+	resolved := make([]ResolvedTarget, len(targets))
+	for i, t := range targets {
+		resolved[i] = ResolvedTarget{
+			ProviderID: t.ProviderID,
+			Model:      t.Model,
+			Priority:   t.Priority,
+		}
+	}
+
+	// Sort by priority ascending (lower priority number = higher precedence).
+	slices.SortStableFunc(resolved, func(a, b ResolvedTarget) int {
+		return a.Priority - b.Priority
+	})
+
+	return resolved, nil
 }

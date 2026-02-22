@@ -41,6 +41,8 @@ func New(deps Deps) http.Handler {
 	r.Group(func(r chi.Router) {
 		r.Use(s.authenticate)
 		r.Post("/v1/chat/completions", s.handleChatCompletion)
+		r.Post("/v1/embeddings", s.handleEmbeddings)
+		r.Get("/v1/models", s.handleListModels)
 	})
 
 	return r

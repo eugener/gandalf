@@ -116,3 +116,17 @@ func (sw *statusWriter) Write(b []byte) (int, error) {
 	}
 	return sw.ResponseWriter.Write(b)
 }
+
+// Flush delegates to the underlying ResponseWriter if it implements http.Flusher.
+// This ensures SSE streaming works through middleware.
+func (sw *statusWriter) Flush() {
+	if f, ok := sw.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
+// Unwrap returns the underlying ResponseWriter, allowing http.ResponseController
+// and similar utilities to find interface implementations.
+func (sw *statusWriter) Unwrap() http.ResponseWriter {
+	return sw.ResponseWriter
+}

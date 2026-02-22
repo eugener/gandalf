@@ -1,4 +1,4 @@
-# Gandalf - LLM Gateway (Phase 1)
+# Gandalf - LLM Gateway (Phase 2)
 
 ## Build and Test
 
@@ -17,17 +17,19 @@ make coverage       # test coverage report
 
 ## Architecture
 
-Hexagonal architecture. Domain types at `internal/gateway.go`, interfaces at consumer level. Phase 1 supports non-streaming `POST /v1/chat/completions` via OpenAI adapter with API key auth.
+Hexagonal architecture. Domain types at `internal/gateway.go`, interfaces at consumer level. Phase 2 adds SSE streaming, multi-provider support (OpenAI, Anthropic, Gemini), priority failover routing, and `/v1/embeddings` + `/v1/models` endpoints.
 
-- `internal/gateway.go` -- domain types (Provider, ChatRequest/Response, APIKey, Identity, etc.) + Authenticator interface. No project imports.
-- `internal/errors.go` -- sentinel errors (ErrUnauthorized, ErrNotFound, ErrRateLimited, etc.)
-- `internal/auth/` -- API key auth with otter cache (30s TTL), `subtle.ConstantTimeCompare` belt-and-suspenders on hash. JWT planned for later.
-- `internal/server/` -- HTTP handlers + middleware (chi). Routes wired inline in `server.go`.
-- `internal/app/` -- ProxyService (route resolve + provider call), RouterService, KeyManager (create/delete keys)
-- `internal/provider/` -- Registry (name->Provider map) + OpenAI adapter. Streaming/embeddings stubbed.
+- `internal/gateway.go` -- domain types (Provider, ChatRequest/Response, StreamChunk, APIKey, Identity, etc.) + Authenticator interface. No project imports.
+- `internal/errors.go` -- sentinel errors (ErrUnauthorized, ErrNotFound, ErrRateLimited, ErrProviderError, etc.)
+- `internal/auth/` -- API key auth with otter cache (30s TTL), `subtle.ConstantTimeCompare` belt-and-suspenders on hash.
+- `internal/server/` -- HTTP handlers + middleware (chi). SSE streaming support. Routes wired inline in `server.go`.
+- `internal/app/` -- ProxyService (failover routing + provider call), RouterService (priority-sorted targets), KeyManager
+- `internal/provider/` -- Registry (name->Provider map) + adapters for OpenAI, Anthropic, Gemini
+- `internal/provider/sseutil/` -- shared SSE line reader for all provider adapters
 - `internal/storage/` -- Store interfaces in `storage.go`. SQLite impl with separate read/write pools, WAL mode, goose migrations.
 - `internal/config/` -- YAML config with `${ENV}` expansion, DB bootstrap (seed providers, routes, keys)
-- `cmd/gandalf/` -- Entrypoint: parse flags, wire deps, graceful shutdown via SIGTERM/SIGINT
+- `internal/testutil/` -- reusable test fakes (FakeProvider, FakeStore, FakeAuth, RejectAuth)
+- `cmd/gandalf/` -- Entrypoint: parse flags, wire deps, shared DNS cache, graceful shutdown
 
 ## Directory Structure
 
@@ -35,7 +37,7 @@ Hexagonal architecture. Domain types at `internal/gateway.go`, interfaces at con
 gandalf/
   cmd/gandalf/
     main.go                        # Entrypoint: parse flags, call run()
-    run.go                         # Wire deps, start server, graceful shutdown
+    run.go                         # Wire deps, DNS cache, start server, graceful shutdown
   internal/
     gateway.go                     # Domain types + Authenticator interface
     errors.go                      # Sentinel errors
@@ -43,47 +45,72 @@ gandalf/
       apikey.go                    # API key auth: hash -> otter cache -> DB fallback
     server/
       server.go                    # New(Deps) http.Handler, route registration (chi)
-      proxy.go                     # handleChatCompletion + writeJSON + errorResponse helpers
-      middleware.go                # recovery, requestID, logging, authenticate middleware
-      health.go                    # handleHealthz, handleReadyz (readyz pings DB via ReadyChecker)
+      proxy.go                     # handleChatCompletion (non-stream + stream branch) + helpers
+      sse.go                       # SSE write helpers: writeSSEHeaders, writeSSEData, writeSSEDone, writeSSEKeepAlive
+      embeddings.go                # handleEmbeddings handler
+      models.go                    # handleListModels handler (aggregates from all providers)
+      middleware.go                # recovery, requestID, logging, authenticate (statusWriter supports Flush)
+      health.go                    # handleHealthz, handleReadyz
       server_test.go               # Handler tests with inline fakes
-      server_bench_test.go         # Benchmarks: ChatCompletion, Healthz (alloc tracking)
+      server_bench_test.go         # Benchmarks: ChatCompletion, Stream, Healthz
+      sse_test.go                  # SSE write helper unit tests
+      stream_test.go               # E2E streaming tests: OpenAI, Anthropic, Gemini, failover, disconnect
     app/
-      proxy.go                     # ProxyService: route resolve -> provider call
-      router.go                    # RouterService: model alias -> provider/model resolution
+      proxy.go                     # ProxyService: priority failover routing for chat/stream/embeddings/models
+      router.go                    # RouterService: model alias -> []ResolvedTarget sorted by priority
       keymanager.go                # KeyManager: create/delete API keys
+      proxy_test.go                # Failover tests: primary ok, failover, client error, all fail
+      router_test.go               # Multi-target, no route default, empty targets
     provider/
       provider.go                  # Registry: thread-safe name->Provider map
+      sseutil/
+        reader.go                  # Shared SSE line reader: NewScanner, ParseSSELine
+        reader_test.go             # SSE parsing tests
       openai/
-        client.go                  # OpenAI adapter (ChatCompletion, ListModels, HealthCheck)
+        client.go                  # OpenAI adapter: ChatCompletion, Stream, Embeddings, ListModels + dnscache
+        client_test.go             # Stream, cancel, HTTP error, embeddings tests
+      anthropic/
+        client.go                  # Anthropic adapter: ChatCompletion, Stream, ListModels + dnscache
+        translate.go               # OpenAI <-> Anthropic request/response translation
+        stream.go                  # SSE event state machine (message_start, content_block_delta, etc.)
+        client_test.go             # Translation, streaming state machine tests
+      gemini/
+        client.go                  # Gemini adapter: ChatCompletion, Stream, Embeddings, ListModels + dnscache
+        translate.go               # OpenAI <-> Gemini request/response translation
+        stream.go                  # EOF-terminated SSE reader
+        client_test.go             # Translation, EOF streaming tests
     storage/
-      storage.go                   # Store interfaces (APIKeyStore, ProviderStore, RouteStore, UsageStore, OrgStore)
+      storage.go                   # Store interfaces
       sqlite/
-        db.go                      # New(dsn): open DB, run migrations, read/write pools, Ping()
-        apikey.go                  # APIKeyStore impl + SQL helpers
-        provider.go                # ProviderStore impl
-        route.go                   # RouteStore impl
-        org.go                     # OrgStore impl (orgs + teams)
-        usage.go                   # UsageStore impl (batch insert)
-        sqlite_test.go             # Integration tests against temp-file SQLite
-        migrations/
-          001_init.sql             # Schema: organizations, teams, providers, api_keys, routes, usage_records
-  configs/gandalf.yaml             # Example config with env var placeholders
+        db.go, apikey.go, provider.go, route.go, org.go, usage.go
+        sqlite_test.go
+        migrations/001_init.sql
+    testutil/
+      fake_provider.go             # FakeProvider with configurable callbacks + FakeStreamChan
+      fake_store.go                # In-memory FakeStore implementing storage.Store
+      fake_auth.go                 # FakeAuth (always succeeds) + RejectAuth
+    config/
+      config.go, bootstrap.go, *_test.go
+  configs/gandalf.yaml             # Example config: OpenAI + Anthropic + Gemini
   Makefile
-  spec.md                          # Full multi-phase design spec
+  spec.md
 ```
 
 ## Dependency Flow
 
 ```
-cmd/gandalf  -- wires concrete types, imports everything
-  -> server  -- HTTP transport, depends on app + gateway interfaces
-  -> app     -- business logic, depends on storage + provider interfaces
+cmd/gandalf  -- wires concrete types, DNS resolver, imports everything
+  -> server  -- HTTP transport + SSE streaming, depends on app + gateway interfaces
+  -> app     -- business logic, failover routing, depends on storage + provider interfaces
   -> gateway -- domain types (no project imports)
-  <- provider/openai -- implements gateway.Provider
-  <- storage/sqlite  -- implements storage.Store
-  <- auth            -- implements gateway.Authenticator
-  <- config          -- Config struct + Load() + Bootstrap()
+  <- provider/openai     -- implements gateway.Provider (OpenAI)
+  <- provider/anthropic  -- implements gateway.Provider (Anthropic Messages API)
+  <- provider/gemini     -- implements gateway.Provider (Gemini generateContent API)
+  <- provider/sseutil    -- shared SSE reading utilities
+  <- storage/sqlite      -- implements storage.Store
+  <- auth                -- implements gateway.Authenticator
+  <- config              -- Config struct + Load() + Bootstrap()
+  <- testutil            -- reusable test fakes
 ```
 
 ## Key Interfaces
@@ -116,19 +143,37 @@ type Store interface {
 }
 ```
 
-## API Surface (Phase 1)
+## API Surface (Phase 2)
 
-- `POST /v1/chat/completions` -- non-streaming only (auth required)
+- `POST /v1/chat/completions` -- non-streaming and SSE streaming (auth required)
+- `POST /v1/embeddings` -- embedding generation (auth required)
+- `GET /v1/models` -- list models from all providers (auth required)
 - `GET /healthz`, `GET /readyz` -- no auth
+
+## Streaming Design
+
+- Channel-based: `ChatCompletionStream` returns `<-chan StreamChunk` (buffer size 8)
+- OpenAI: raw `data:` JSON passthrough, no parsing on hot path
+- Anthropic: SSE event state machine translates to OpenAI-format chunks
+- Gemini: EOF-terminated SSE, cumulative usage, translates to OpenAI-format chunks
+- Handler: select on chunk channel, 15s keep-alive ticker, context cancellation
+- `statusWriter` implements `http.Flusher` for SSE through middleware
+
+## Priority Failover
+
+- `RouterService.ResolveModel` returns `[]ResolvedTarget` sorted by priority (ascending)
+- `ProxyService` iterates targets: on provider/network error -> try next; on client error (4xx) -> return immediately
+- Applied to ChatCompletion, ChatCompletionStream, and Embeddings
 
 ## Conventions
 
 - Interfaces defined at consumer, not alongside implementation
-- Inline fakes in `_test.go` files (no separate testutil package yet)
+- Inline fakes in `server_test.go` for existing tests; `testutil/` package for Phase 2+ tests
 - Table-driven tests with `t.Parallel()`
-- SQLite: separate read/write pools, WAL mode, goose embedded migrations
+- Provider apiError types implement `HTTPStatus() int` for failover decisions
+- Shared `dnscache.Resolver` passed to all provider constructors, refreshed every 5 min
 - Context helpers: `ContextWithIdentity`, `IdentityFromContext`, `ContextWithRequestID`, `RequestIDFromContext`
-- RBAC defined as permission bitmask (`Identity.Can(p Permission) bool`), role mapping in `RolePermissions` var
+- RBAC defined as permission bitmask, role mapping in `RolePermissions`
 - Config supports `${ENV_VAR}` expansion in YAML
 - Bootstrap seeds providers/routes/keys from config on first run (idempotent)
 - `log/slog` for logging (stdlib)
@@ -143,15 +188,32 @@ type Store interface {
 | `pressly/goose/v3` | Embedded SQL migrations |
 | `go.yaml.in/yaml/v3` | YAML config parsing |
 | `modernc.org/sqlite` | Pure-Go SQLite (no CGO) |
+| `rs/dnscache` | Shared DNS cache for all provider HTTP transports |
+| `tidwall/gjson` | Zero-alloc JSON field extraction for response translation |
 
 ## Testing
 
 | Layer | Approach |
 |-------|----------|
-| `server/` | `httptest.NewRecorder` + inline fakes for auth/provider/store |
+| `server/` | `httptest.NewRecorder` + inline fakes; E2E streaming with real provider adapters |
+| `app/` | Table-driven proxy failover + router priority tests with `testutil.FakeProvider` |
+| `provider/openai/` | `httptest.NewServer` for streaming, cancellation, HTTP errors, embeddings |
+| `provider/anthropic/` | Request/response translation, SSE event state machine with canned events |
+| `provider/gemini/` | Request/response translation, EOF-terminated streaming |
+| `provider/sseutil/` | SSE line parsing unit tests |
 | `storage/sqlite/` | Temp-file SQLite, full CRUD round-trip tests |
-| `config/` | Temp YAML files, env var expansion, default validation, bootstrap seed + idempotency |
+| `config/` | YAML parsing, env var expansion, bootstrap seed + idempotency |
+
+## Benchmark Baseline
+
+```
+ChatCompletion:       ~68 allocs/op  ~4.4us
+ChatCompletionStream: ~74 allocs/op  ~4.4us
+Healthz:              ~25 allocs/op  ~1.9us
+```
+
+Remaining alloc bottleneck is `encoding/json` (~20 allocs) -- needs json/v2 or third-party lib.
 
 ## Future Phases
 
-See `spec.md` for the full roadmap: streaming, multi-provider (Anthropic/Gemini), rate limiting, caching, admin API, observability, JWT/OIDC auth, multi-tenant RBAC, circuit breakers, and more.
+See `spec.md` for the full roadmap: rate limiting, caching, admin API, observability, JWT/OIDC auth, multi-tenant RBAC, circuit breakers, and more.

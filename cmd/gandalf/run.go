@@ -8,11 +8,16 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
+
+	"github.com/rs/dnscache"
 
 	"github.com/eugener/gandalf/internal/app"
 	"github.com/eugener/gandalf/internal/auth"
 	"github.com/eugener/gandalf/internal/config"
 	"github.com/eugener/gandalf/internal/provider"
+	"github.com/eugener/gandalf/internal/provider/anthropic"
+	"github.com/eugener/gandalf/internal/provider/gemini"
 	"github.com/eugener/gandalf/internal/provider/openai"
 	"github.com/eugener/gandalf/internal/server"
 	"github.com/eugener/gandalf/internal/storage/sqlite"
@@ -40,6 +45,16 @@ func run(configPath string) error {
 		return err
 	}
 
+	// Shared DNS cache for all provider HTTP clients.
+	dnsResolver := &dnscache.Resolver{}
+	go func() {
+		t := time.NewTicker(5 * time.Minute)
+		defer t.Stop()
+		for range t.C {
+			dnsResolver.Refresh(true)
+		}
+	}()
+
 	// Register providers
 	reg := provider.NewRegistry()
 	for _, p := range cfg.Providers {
@@ -48,7 +63,11 @@ func run(configPath string) error {
 		}
 		switch p.Name {
 		case "openai":
-			reg.Register(p.Name, openai.New(p.APIKey, p.BaseURL))
+			reg.Register(p.Name, openai.New(p.APIKey, p.BaseURL, dnsResolver))
+		case "anthropic":
+			reg.Register(p.Name, anthropic.New(p.APIKey, p.BaseURL, dnsResolver))
+		case "gemini":
+			reg.Register(p.Name, gemini.New(p.APIKey, p.BaseURL, dnsResolver))
 		default:
 			slog.Warn("unknown provider, skipping", "name", p.Name)
 		}

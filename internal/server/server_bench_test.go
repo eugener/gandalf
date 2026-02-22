@@ -54,6 +54,24 @@ func BenchmarkChatCompletionParallel(b *testing.B) {
 	})
 }
 
+const streamPayload = `{"model":"gpt-4o","messages":[{"role":"user","content":"Hello"}],"stream":true}`
+
+func BenchmarkChatCompletionStream(b *testing.B) {
+	h := newTestHandler()
+
+	b.ResetTimer()
+	for b.Loop() {
+		req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(streamPayload))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", "Bearer gnd_test")
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			b.Fatalf("status = %d, want 200; body = %s", rec.Code, rec.Body.String())
+		}
+	}
+}
+
 func BenchmarkHealthz(b *testing.B) {
 	h := newTestHandler()
 

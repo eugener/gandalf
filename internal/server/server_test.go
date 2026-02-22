@@ -43,11 +43,21 @@ func (fakeProvider) ChatCompletion(_ context.Context, _ *gateway.ChatRequest) (*
 		}},
 	}, nil
 }
-func (fakeProvider) ChatCompletionStream(context.Context, *gateway.ChatRequest) (<-chan gateway.StreamChunk, error) {
-	return nil, gateway.ErrBadRequest
+func (fakeProvider) ChatCompletionStream(_ context.Context, _ *gateway.ChatRequest) (<-chan gateway.StreamChunk, error) {
+	ch := make(chan gateway.StreamChunk, 3)
+	ch <- gateway.StreamChunk{Data: []byte(`{"id":"chatcmpl-test","choices":[{"delta":{"content":"hi"}}]}`)}
+	ch <- gateway.StreamChunk{Data: []byte(`{"id":"chatcmpl-test","choices":[{"delta":{"content":"!"}}]}`)}
+	ch <- gateway.StreamChunk{Done: true}
+	close(ch)
+	return ch, nil
 }
-func (fakeProvider) Embeddings(context.Context, *gateway.EmbeddingRequest) (*gateway.EmbeddingResponse, error) {
-	return nil, gateway.ErrBadRequest
+func (fakeProvider) Embeddings(_ context.Context, _ *gateway.EmbeddingRequest) (*gateway.EmbeddingResponse, error) {
+	return &gateway.EmbeddingResponse{
+		Object: "list",
+		Data:   []byte(`[{"object":"embedding","index":0,"embedding":[0.1]}]`),
+		Model:  "text-embedding-3-small",
+		Usage:  &gateway.Usage{PromptTokens: 3, TotalTokens: 3},
+	}, nil
 }
 func (fakeProvider) ListModels(context.Context) ([]string, error) { return []string{"gpt-4o"}, nil }
 func (fakeProvider) HealthCheck(context.Context) error             { return nil }
@@ -189,5 +199,70 @@ func TestRequestIDHeader(t *testing.T) {
 
 	if rec.Header().Get("X-Request-ID") == "" {
 		t.Error("X-Request-ID header should be set")
+	}
+}
+
+func TestListModels(t *testing.T) {
+	t.Parallel()
+	h := newTestHandler()
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	req.Header.Set("Authorization", "Bearer gnd_test")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body = %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "gpt-4o") {
+		t.Errorf("body missing gpt-4o, got: %s", rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"object":"list"`) {
+		t.Error("response should be an object list")
+	}
+}
+
+func TestEmbeddings(t *testing.T) {
+	t.Parallel()
+	h := newTestHandler()
+
+	body := `{"model":"text-embedding-3-small","input":"hello"}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/embeddings", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer gnd_test")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body = %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "text-embedding-3-small") {
+		t.Errorf("body missing model, got: %s", rec.Body.String())
+	}
+}
+
+func TestChatCompletionStream(t *testing.T) {
+	t.Parallel()
+	h := newTestHandler()
+
+	body := `{"model":"gpt-4o","messages":[{"role":"user","content":"hello"}],"stream":true}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer gnd_test")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body = %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	if ct := rec.Header().Get("Content-Type"); ct != "text/event-stream" {
+		t.Errorf("Content-Type = %q, want text/event-stream", ct)
+	}
+	respBody := rec.Body.String()
+	if !strings.Contains(respBody, "data: ") {
+		t.Error("response should contain SSE data frames")
+	}
+	if !strings.Contains(respBody, "[DONE]") {
+		t.Error("response should contain [DONE] sentinel")
 	}
 }

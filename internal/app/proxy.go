@@ -2,14 +2,19 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"log/slog"
+	"net/http"
 
 	gateway "github.com/eugener/gandalf/internal"
 	"github.com/eugener/gandalf/internal/provider"
 )
 
 // ProxyService forwards chat completion requests to the appropriate LLM provider
-// based on model routing configuration.
+// based on model routing configuration. It supports priority failover: on
+// provider/network errors it tries the next target; on client errors (4xx)
+// it returns immediately.
 type ProxyService struct {
 	providers *provider.Registry
 	router    *RouterService
@@ -20,23 +25,147 @@ func NewProxyService(providers *provider.Registry, router *RouterService) *Proxy
 	return &ProxyService{providers: providers, router: router}
 }
 
-// ChatCompletion resolves the requested model to a provider via routing rules
-// and forwards the chat completion request. Streaming is not supported yet;
-// if req.Stream is true the upstream still returns a non-streaming response.
+// ChatCompletion resolves the requested model to providers via routing rules
+// and forwards the chat completion request with priority failover.
 func (ps *ProxyService) ChatCompletion(ctx context.Context, req *gateway.ChatRequest) (*gateway.ChatResponse, error) {
-	providerName, actualModel, err := ps.router.ResolveModel(ctx, req.Model)
+	targets, err := ps.router.ResolveModel(ctx, req.Model)
 	if err != nil {
 		return nil, err
 	}
 
-	p, err := ps.providers.Get(providerName)
+	var lastErr error
+	for _, target := range targets {
+		p, err := ps.providers.Get(target.ProviderID)
+		if err != nil {
+			lastErr = fmt.Errorf("%w: %v", gateway.ErrProviderError, err)
+			continue
+		}
+
+		outReq := *req
+		outReq.Model = target.Model
+		resp, err := p.ChatCompletion(ctx, &outReq)
+		if err != nil {
+			if isClientError(err) {
+				return nil, err
+			}
+			slog.LogAttrs(ctx, slog.LevelWarn, "provider failed, trying next",
+				slog.String("provider", target.ProviderID),
+				slog.String("error", err.Error()),
+			)
+			lastErr = fmt.Errorf("%w: %v", gateway.ErrProviderError, err)
+			continue
+		}
+		return resp, nil
+	}
+	return nil, lastErr
+}
+
+// ChatCompletionStream resolves the model and forwards a streaming request
+// with priority failover.
+func (ps *ProxyService) ChatCompletionStream(ctx context.Context, req *gateway.ChatRequest) (<-chan gateway.StreamChunk, error) {
+	targets, err := ps.router.ResolveModel(ctx, req.Model)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %v", gateway.ErrProviderError, err)
+		return nil, err
 	}
 
-	// Shallow copy to avoid mutating caller's request.
-	outReq := *req
-	outReq.Model = actualModel
+	var lastErr error
+	for _, target := range targets {
+		p, err := ps.providers.Get(target.ProviderID)
+		if err != nil {
+			lastErr = fmt.Errorf("%w: %v", gateway.ErrProviderError, err)
+			continue
+		}
 
-	return p.ChatCompletion(ctx, &outReq)
+		outReq := *req
+		outReq.Model = target.Model
+		ch, err := p.ChatCompletionStream(ctx, &outReq)
+		if err != nil {
+			if isClientError(err) {
+				return nil, err
+			}
+			slog.LogAttrs(ctx, slog.LevelWarn, "provider stream failed, trying next",
+				slog.String("provider", target.ProviderID),
+				slog.String("error", err.Error()),
+			)
+			lastErr = fmt.Errorf("%w: %v", gateway.ErrProviderError, err)
+			continue
+		}
+		return ch, nil
+	}
+	return nil, lastErr
+}
+
+// Embeddings resolves the model and forwards an embedding request with
+// priority failover.
+func (ps *ProxyService) Embeddings(ctx context.Context, req *gateway.EmbeddingRequest) (*gateway.EmbeddingResponse, error) {
+	targets, err := ps.router.ResolveModel(ctx, req.Model)
+	if err != nil {
+		return nil, err
+	}
+
+	var lastErr error
+	for _, target := range targets {
+		p, err := ps.providers.Get(target.ProviderID)
+		if err != nil {
+			lastErr = fmt.Errorf("%w: %v", gateway.ErrProviderError, err)
+			continue
+		}
+
+		outReq := *req
+		outReq.Model = target.Model
+		resp, err := p.Embeddings(ctx, &outReq)
+		if err != nil {
+			if isClientError(err) {
+				return nil, err
+			}
+			slog.LogAttrs(ctx, slog.LevelWarn, "provider embeddings failed, trying next",
+				slog.String("provider", target.ProviderID),
+				slog.String("error", err.Error()),
+			)
+			lastErr = fmt.Errorf("%w: %v", gateway.ErrProviderError, err)
+			continue
+		}
+		return resp, nil
+	}
+	return nil, lastErr
+}
+
+// ListModels aggregates model lists from all registered providers.
+func (ps *ProxyService) ListModels(ctx context.Context) ([]string, error) {
+	var all []string
+	for _, name := range ps.providers.List() {
+		p, err := ps.providers.Get(name)
+		if err != nil {
+			continue
+		}
+		models, err := p.ListModels(ctx)
+		if err != nil {
+			continue
+		}
+		all = append(all, models...)
+	}
+	return all, nil
+}
+
+// httpStatusError is an interface for errors that carry an HTTP status code.
+type httpStatusError interface {
+	HTTPStatus() int
+}
+
+// isClientError returns true if the error represents a client-side error
+// (4xx) that should not trigger failover.
+func isClientError(err error) bool {
+	// Check if the error carries an HTTP status code.
+	var he httpStatusError
+	if errors.As(err, &he) {
+		code := he.HTTPStatus()
+		return code >= http.StatusBadRequest && code < http.StatusInternalServerError
+	}
+	// Treat domain-level client errors as non-retriable.
+	return errors.Is(err, gateway.ErrBadRequest) ||
+		errors.Is(err, gateway.ErrUnauthorized) ||
+		errors.Is(err, gateway.ErrForbidden) ||
+		errors.Is(err, gateway.ErrModelNotAllowed) ||
+		errors.Is(err, gateway.ErrKeyExpired) ||
+		errors.Is(err, gateway.ErrKeyBlocked)
 }

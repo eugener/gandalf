@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"time"
 
 	gateway "github.com/eugener/gandalf/internal"
 )
@@ -16,6 +17,11 @@ func (s *server) handleChatCompletion(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if req.Stream {
+		s.handleChatCompletionStream(w, r, &req)
+		return
+	}
+
 	resp, err := s.deps.Proxy.ChatCompletion(r.Context(), &req)
 	if err != nil {
 		status := errorStatus(err)
@@ -24,6 +30,60 @@ func (s *server) handleChatCompletion(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// handleChatCompletionStream handles SSE streaming chat completion requests.
+func (s *server) handleChatCompletionStream(w http.ResponseWriter, r *http.Request, req *gateway.ChatRequest) {
+	ch, err := s.deps.Proxy.ChatCompletionStream(r.Context(), req)
+	if err != nil {
+		status := errorStatus(err)
+		writeJSON(w, status, errorResponse(err.Error()))
+		return
+	}
+
+	writeSSEHeaders(w)
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		slog.Error("ResponseWriter does not implement http.Flusher")
+		return
+	}
+	flusher.Flush()
+
+	keepAlive := time.NewTicker(15 * time.Second)
+	defer keepAlive.Stop()
+
+	for {
+		select {
+		case chunk, ok := <-ch:
+			if !ok {
+				writeSSEDone(w)
+				flusher.Flush()
+				return
+			}
+			if chunk.Err != nil {
+				slog.LogAttrs(r.Context(), slog.LevelError, "stream error",
+					slog.String("error", chunk.Err.Error()),
+				)
+				writeSSEDone(w)
+				flusher.Flush()
+				return
+			}
+			if chunk.Done {
+				writeSSEDone(w)
+				flusher.Flush()
+				return
+			}
+			writeSSEData(w, chunk.Data)
+			flusher.Flush()
+
+		case <-keepAlive.C:
+			writeSSEKeepAlive(w)
+			flusher.Flush()
+
+		case <-r.Context().Done():
+			return
+		}
+	}
 }
 
 type apiError struct {

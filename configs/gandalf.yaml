@@ -22,15 +22,25 @@ providers:
     weight: 1
     timeout_ms: 30000
 
-#  - name: anthropic
-#    base_url: https://api.anthropic.com/v1
-#    api_key: "${ANTHROPIC_API_KEY}"
-#    models:
-#      - claude-sonnet-4-6
-#      - claude-haiku-4-5
-#    priority: 2
-#    weight: 1
-#    timeout_ms: 30000
+  - name: anthropic
+    base_url: https://api.anthropic.com/v1
+    api_key: "${ANTHROPIC_API_KEY}"
+    models:
+      - claude-sonnet-4-6
+      - claude-haiku-4-5
+    priority: 2
+    weight: 1
+    timeout_ms: 30000
+
+  - name: gemini
+    base_url: https://generativelanguage.googleapis.com/v1beta
+    api_key: "${GEMINI_API_KEY}"
+    models:
+      - gemini-2.0-flash
+      - gemini-2.0-pro
+    priority: 3
+    weight: 1
+    timeout_ms: 30000
 
 routes:
   - model_alias: gpt-4o
