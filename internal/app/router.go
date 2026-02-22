@@ -25,7 +25,9 @@ func NewRouterService(routes storage.RouteStore) *RouterService {
 func (rs *RouterService) ResolveModel(ctx context.Context, model string) (providerName, actualModel string, err error) {
 	route, err := rs.routeStore.GetRouteByAlias(ctx, model)
 	if err != nil {
-		// No route -- treat as direct pass-through.
+		// Treat all lookup failures as "no configured route" and fall through
+		// to direct pass-through. Covers ErrNotFound (expected) and transient
+		// DB errors (best-effort: prefer forwarding over failing the request).
 		return "openai", model, nil //nolint:nilerr
 	}
 

@@ -92,7 +92,10 @@ func (s *server) authenticate(next http.Handler) http.Handler {
 	})
 }
 
-// statusWriter wraps ResponseWriter to capture the status code.
+// statusWriter wraps ResponseWriter to capture the HTTP status code.
+// WriteHeader records only the first status code; subsequent calls are
+// forwarded to the underlying writer but do not update the captured value,
+// matching net/http semantics where only the first WriteHeader takes effect.
 type statusWriter struct {
 	http.ResponseWriter
 	status      int

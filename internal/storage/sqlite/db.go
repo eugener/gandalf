@@ -57,6 +57,8 @@ func New(dsn string) (*Store, error) {
 	return &Store{write: write, read: read}, nil
 }
 
+// runMigrations applies embedded SQL migrations using goose.
+// fs.Sub strips the "migrations/" prefix so goose sees files at the FS root.
 func runMigrations(db *sql.DB) error {
 	fsys, err := fs.Sub(migrations, "migrations")
 	if err != nil {

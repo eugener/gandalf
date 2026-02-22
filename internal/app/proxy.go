@@ -21,7 +21,8 @@ func NewProxyService(providers *provider.Registry, router *RouterService) *Proxy
 }
 
 // ChatCompletion resolves the requested model to a provider via routing rules
-// and forwards the chat completion request.
+// and forwards the chat completion request. Streaming is not supported yet;
+// if req.Stream is true the upstream still returns a non-streaming response.
 func (ps *ProxyService) ChatCompletion(ctx context.Context, req *gateway.ChatRequest) (*gateway.ChatResponse, error) {
 	providerName, actualModel, err := ps.router.ResolveModel(ctx, req.Model)
 	if err != nil {

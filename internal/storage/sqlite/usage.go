@@ -14,6 +14,8 @@ func (s *Store) InsertUsage(ctx context.Context, records []gateway.UsageRecord) 
 		return nil
 	}
 
+	// cols must match the number of columns in the INSERT below.
+	// Single multi-row INSERT avoids N round-trips for large batches.
 	const cols = 18
 	placeholders := make([]string, len(records))
 	args := make([]any, 0, len(records)*cols)

@@ -1,4 +1,5 @@
-// Package auth implements authentication for the Gandalf LLM gateway.
+// Package auth implements API key authentication for the Gandalf gateway.
+// Keys are validated against the store and cached in a W-TinyLFU cache.
 package auth
 
 import (
@@ -15,8 +16,8 @@ import (
 )
 
 const (
-	cacheTTL    = 30 * time.Second
-	cacheMaxLen = 10_000
+	cacheTTL    = 30 * time.Second // short enough to pick up key revocations promptly
+	cacheMaxLen = 10_000           // max concurrent active keys expected per deployment
 )
 
 // APIKeyAuth authenticates requests using API keys with "gnd_" prefix.
@@ -93,6 +94,8 @@ func (a *APIKeyAuth) Authenticate(ctx context.Context, r *http.Request) (*gatewa
 }
 
 // buildIdentity constructs an Identity from a validated API key.
+// All API key callers get the "member" role for now; per-key roles
+// are not yet stored in the DB (planned for Phase 2 RBAC).
 func buildIdentity(key *gateway.APIKey) *gateway.Identity {
 	role := "member"
 	perms := gateway.RolePermissions[role]
