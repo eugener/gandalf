@@ -300,6 +300,19 @@ func ContextWithRequestID(ctx context.Context, id string) context.Context {
 	return context.WithValue(ctx, ctxKeyMeta, &requestMeta{RequestID: id})
 }
 
+// --- Native passthrough ---
+
+// NativeProxy is an optional interface that providers can implement to support
+// raw HTTP passthrough. The gateway authenticates and routes the request, then
+// delegates the raw HTTP exchange to the provider. Checked via type assertion.
+type NativeProxy interface {
+	// ProxyRequest forwards a raw HTTP request to the provider's API.
+	// path is the provider-relative path (e.g. "/messages").
+	// The implementation handles auth headers, URL construction, and
+	// response streaming (flush-on-read for SSE/NDJSON).
+	ProxyRequest(ctx context.Context, w http.ResponseWriter, r *http.Request, path string) error
+}
+
 // --- Shared constants and helpers ---
 
 // APIKeyPrefix is the prefix for all Gandalf API keys.

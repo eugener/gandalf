@@ -7,6 +7,8 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/maypok86/otter/v2 v2.3.0
 	github.com/pressly/goose/v3 v3.26.0
+	github.com/rs/dnscache v0.0.0-20230804202142-fc85eb664529
+	github.com/tidwall/gjson v1.18.0
 	go.yaml.in/yaml/v3 v3.0.4
 	modernc.org/sqlite v1.46.1
 )
@@ -19,10 +21,8 @@ require (
 	github.com/ncruces/go-strftime v1.0.0 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
-	github.com/rs/dnscache v0.0.0-20230804202142-fc85eb664529 // indirect
 	github.com/sethvargo/go-retry v0.3.0 // indirect
 	github.com/stretchr/testify v1.11.1 // indirect
-	github.com/tidwall/gjson v1.18.0 // indirect
 	github.com/tidwall/match v1.1.1 // indirect
 	github.com/tidwall/pretty v1.2.0 // indirect
 	go.uber.org/multierr v1.11.0 // indirect

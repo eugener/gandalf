@@ -19,14 +19,14 @@ All make targets set `GOEXPERIMENT=jsonv2` for lower alloc counts in JSON-heavy 
 
 ## Architecture
 
-Hexagonal architecture. Domain types at `internal/gateway.go`, interfaces at consumer level. Phase 2 adds SSE streaming, multi-provider support (OpenAI, Anthropic, Gemini), priority failover routing, and `/v1/embeddings` + `/v1/models` endpoints.
+Hexagonal architecture. Domain types at `internal/gateway.go`, interfaces at consumer level. Multi-provider support (OpenAI, Anthropic, Gemini, Ollama), priority failover routing, SSE streaming, native API passthrough, and `/v1/embeddings` + `/v1/models` endpoints.
 
-- `internal/gateway.go` -- domain types (Provider, ChatRequest/Response, StreamChunk, APIKey, Identity, etc.) + Authenticator interface. Bundled `requestMeta` context (single alloc for requestID + identity). No project imports.
+- `internal/gateway.go` -- domain types (Provider, NativeProxy, ChatRequest/Response, StreamChunk, APIKey, Identity, etc.) + Authenticator interface. Bundled `requestMeta` context (single alloc for requestID + identity). No project imports.
 - `internal/errors.go` -- sentinel errors (ErrUnauthorized, ErrNotFound, ErrRateLimited, ErrProviderError, etc.)
 - `internal/auth/` -- API key auth with otter cache (30s TTL), `subtle.ConstantTimeCompare` belt-and-suspenders on hash.
-- `internal/server/` -- HTTP handlers + middleware (chi). SSE streaming support. Routes wired inline in `server.go`.
+- `internal/server/` -- HTTP handlers + middleware (chi). SSE streaming support. Native passthrough routes in `native.go`. Routes wired inline in `server.go`.
 - `internal/app/` -- ProxyService (failover routing + provider call), RouterService (priority-sorted targets, otter-cached), KeyManager
-- `internal/provider/` -- Registry (name->Provider map) + adapters for OpenAI, Anthropic, Gemini
+- `internal/provider/` -- Registry (name->Provider map) + ForwardRequest shared helper + adapters for OpenAI, Anthropic, Gemini, Ollama
 - `internal/provider/sseutil/` -- shared SSE line reader for all provider adapters
 - `internal/storage/` -- Store interfaces in `storage.go`. SQLite impl with separate read/write pools, WAL mode, goose migrations.
 - `internal/config/` -- YAML config with `${ENV}` expansion, DB bootstrap (seed providers, routes, keys)
@@ -41,13 +41,14 @@ gandalf/
     main.go                        # Entrypoint: parse flags, call run()
     run.go                         # Wire deps, DNS cache, start server, graceful shutdown
   internal/
-    gateway.go                     # Domain types + Authenticator interface + bundled requestMeta context
+    gateway.go                     # Domain types + Provider/NativeProxy/Authenticator interfaces + bundled requestMeta context
     errors.go                      # Sentinel errors
     auth/
       apikey.go                    # API key auth: hash -> otter cache -> DB fallback
     server/
       server.go                    # New(Deps) http.Handler, route registration (chi)
       proxy.go                     # handleChatCompletion (non-stream + stream branch) + helpers
+      native.go                    # Native API passthrough: handleNativeProxy, normalizeAuth, route mounting
       sse.go                       # SSE write helpers: writeSSEHeaders, writeSSEData, writeSSEDone, writeSSEKeepAlive
       embeddings.go                # handleEmbeddings handler
       models.go                    # handleListModels handler (aggregates from all providers)
@@ -55,6 +56,7 @@ gandalf/
       health.go                    # handleHealthz, handleReadyz
       server_test.go               # Handler tests with inline fakes
       server_bench_test.go         # Benchmarks: ChatCompletion, Stream, Healthz
+      native_test.go               # Native passthrough E2E tests: Anthropic, Gemini, Azure, Ollama
       sse_test.go                  # SSE write helper unit tests
       stream_test.go               # E2E streaming tests: OpenAI, Anthropic, Gemini, failover, disconnect
     app/
@@ -65,22 +67,27 @@ gandalf/
       router_test.go               # Multi-target, no route default, empty targets
     provider/
       provider.go                  # Registry: thread-safe name->Provider map
+      proxy.go                     # ForwardRequest: shared native HTTP passthrough helper
+      proxy_test.go                # ForwardRequest tests: headers, SSE flush, upstream errors
       sseutil/
         reader.go                  # Shared SSE line reader: NewScanner, ParseSSELine
         reader_test.go             # SSE parsing tests
       openai/
-        client.go                  # OpenAI adapter: ChatCompletion, Stream, Embeddings, ListModels + dnscache
+        client.go                  # OpenAI adapter: ChatCompletion, Stream, Embeddings, ListModels, ProxyRequest + dnscache
         client_test.go             # Stream, cancel, HTTP error, embeddings tests
       anthropic/
-        client.go                  # Anthropic adapter: ChatCompletion, Stream, ListModels + dnscache
+        client.go                  # Anthropic adapter: ChatCompletion, Stream, ListModels, ProxyRequest + dnscache
         translate.go               # OpenAI <-> Anthropic request/response translation
         stream.go                  # SSE event state machine (message_start, content_block_delta, etc.)
         client_test.go             # Translation, streaming state machine tests
       gemini/
-        client.go                  # Gemini adapter: ChatCompletion, Stream, Embeddings, ListModels + dnscache
+        client.go                  # Gemini adapter: ChatCompletion, Stream, Embeddings, ListModels, ProxyRequest + dnscache
         translate.go               # OpenAI <-> Gemini request/response translation
         stream.go                  # EOF-terminated SSE reader
         client_test.go             # Translation, EOF streaming tests
+      ollama/
+        client.go                  # Ollama adapter: ChatCompletion, Stream, Embeddings, ListModels, ProxyRequest + dnscache
+        client_test.go             # Completion, stream, list models, proxy request tests
     storage/
       storage.go                   # Store interfaces
       sqlite/
@@ -93,7 +100,7 @@ gandalf/
       fake_auth.go                 # FakeAuth (always succeeds) + RejectAuth
     config/
       config.go, bootstrap.go, *_test.go
-  configs/gandalf.yaml             # Example config: OpenAI + Anthropic + Gemini
+  configs/gandalf.yaml             # Example config: OpenAI + Anthropic + Gemini + Ollama
   Makefile
   spec.md
 ```
@@ -105,10 +112,12 @@ cmd/gandalf  -- wires concrete types, DNS resolver, imports everything
   -> server  -- HTTP transport + SSE streaming, depends on app + gateway interfaces
   -> app     -- business logic, failover routing, depends on storage + provider interfaces
   -> gateway -- domain types (no project imports)
-  <- provider/openai     -- implements gateway.Provider (OpenAI)
-  <- provider/anthropic  -- implements gateway.Provider (Anthropic Messages API)
-  <- provider/gemini     -- implements gateway.Provider (Gemini generateContent API)
+  <- provider/openai     -- implements gateway.Provider + NativeProxy (OpenAI)
+  <- provider/anthropic  -- implements gateway.Provider + NativeProxy (Anthropic Messages API)
+  <- provider/gemini     -- implements gateway.Provider + NativeProxy (Gemini generateContent API)
+  <- provider/ollama     -- implements gateway.Provider + NativeProxy (Ollama)
   <- provider/sseutil    -- shared SSE reading utilities
+  <- provider/proxy.go   -- shared ForwardRequest helper for NativeProxy implementations
   <- storage/sqlite      -- implements storage.Store
   <- auth                -- implements gateway.Authenticator
   <- config              -- Config struct + Load() + Bootstrap()
@@ -128,6 +137,11 @@ type Provider interface {
     HealthCheck(ctx context.Context) error
 }
 
+// Optional interface for native API passthrough (checked via type assertion)
+type NativeProxy interface {
+    ProxyRequest(ctx context.Context, w http.ResponseWriter, r *http.Request, path string) error
+}
+
 type Authenticator interface {
     Authenticate(ctx context.Context, r *http.Request) (*Identity, error)
 }
@@ -145,11 +159,29 @@ type Store interface {
 }
 ```
 
-## API Surface (Phase 2)
+## API Surface
+
+### Universal API (OpenAI-format, translated)
 
 - `POST /v1/chat/completions` -- non-streaming and SSE streaming (auth required)
 - `POST /v1/embeddings` -- embedding generation (auth required)
 - `GET /v1/models` -- list models from all providers (auth required)
+
+### Native API Passthrough (raw forwarding, zero translation)
+
+- `POST /v1/messages` -- Anthropic Messages API (auth: `x-api-key` or `Authorization`)
+- `POST /v1beta/models/{model}:generateContent` -- Gemini (auth: `x-goog-api-key` or `Authorization`)
+- `POST /v1beta/models/{model}:streamGenerateContent` -- Gemini streaming
+- `POST /v1beta/models/{model}:embedContent` -- Gemini embeddings
+- `GET /v1beta/models` -- Gemini list models
+- `POST /openai/deployments/{dep}/chat/completions` -- Azure OpenAI (auth: `api-key` or `Authorization`)
+- `POST /openai/deployments/{dep}/embeddings` -- Azure OpenAI embeddings
+- `POST /api/chat` -- Ollama native chat
+- `POST /api/embed` -- Ollama native embeddings
+- `GET /api/tags` -- Ollama list models
+
+### System
+
 - `GET /healthz`, `GET /readyz` -- no auth
 
 ## Streaming Design
@@ -166,6 +198,17 @@ type Store interface {
 - `RouterService.ResolveModel` returns `[]ResolvedTarget` sorted by priority (ascending), cached via otter (10s TTL)
 - `ProxyService` iterates targets: on provider/network error -> try next; on client error (4xx) -> return immediately
 - Applied to ChatCompletion, ChatCompletionStream, and Embeddings
+
+## Native API Passthrough
+
+Two modes coexist:
+1. **Universal API** (existing): `POST /v1/chat/completions` -- OpenAI format, works with ANY model via translation
+2. **Native passthrough** (new): `/v1/messages`, `/v1beta/models/*`, etc. -- raw forwarding to the matching provider
+
+- `NativeProxy` interface (optional, checked via type assertion) -- all four providers implement it
+- `provider.ForwardRequest` shared helper handles URL construction, header forwarding, auth injection, and flush-on-read streaming
+- `normalizeAuth` middleware maps provider-specific auth headers (`x-api-key`, `x-goog-api-key`, `api-key`) to `Authorization: Bearer` before the existing `authenticate` middleware
+- Model extracted from request body (`gjson`) or URL params, routed through existing `RouterService`
 
 ## Performance Optimizations
 
@@ -207,11 +250,13 @@ type Store interface {
 
 | Layer | Approach |
 |-------|----------|
-| `server/` | `httptest.NewRecorder` + inline fakes; E2E streaming with real provider adapters |
+| `server/` | `httptest.NewRecorder` + inline fakes; E2E streaming with real provider adapters; native passthrough E2E |
 | `app/` | Table-driven proxy failover + router priority tests with `testutil.FakeProvider` |
+| `provider/` | ForwardRequest helper: header forwarding, SSE flush, upstream errors |
 | `provider/openai/` | `httptest.NewServer` for streaming, cancellation, HTTP errors, embeddings |
 | `provider/anthropic/` | Request/response translation, SSE event state machine with canned events |
 | `provider/gemini/` | Request/response translation, EOF-terminated streaming |
+| `provider/ollama/` | `httptest.NewServer` for completions, streaming, list models, proxy request |
 | `provider/sseutil/` | SSE line parsing unit tests |
 | `storage/sqlite/` | Temp-file SQLite, full CRUD round-trip tests |
 | `config/` | YAML parsing, env var expansion, bootstrap seed + idempotency |

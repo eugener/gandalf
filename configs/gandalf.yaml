@@ -42,6 +42,17 @@ providers:
     weight: 1
     timeout_ms: 30000
 
+  - name: ollama
+    base_url: http://localhost:11434
+    api_key: ""
+    models:
+      - llama3
+      - mistral
+    priority: 4
+    weight: 1
+    timeout_ms: 60000
+    enabled: false  # enable when Ollama is running locally
+
 routes:
   - model_alias: gpt-4o
     targets:

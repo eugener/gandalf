@@ -9,6 +9,7 @@ import (
 
 	gateway "github.com/eugener/gandalf/internal"
 	"github.com/eugener/gandalf/internal/app"
+	"github.com/eugener/gandalf/internal/provider"
 )
 
 // ReadyChecker reports whether the system is ready to serve traffic.
@@ -18,6 +19,8 @@ type ReadyChecker func(ctx context.Context) error
 type Deps struct {
 	Auth       gateway.Authenticator
 	Proxy      *app.ProxyService
+	Providers  *provider.Registry   // needed for NativeProxy type assertion
+	Router     *app.RouterService   // needed for model -> provider routing
 	Keys       *app.KeyManager
 	ReadyCheck ReadyChecker // nil = always ready (for tests)
 }
@@ -37,13 +40,16 @@ func New(deps Deps) http.Handler {
 	r.Get("/healthz", s.handleHealthz)
 	r.Get("/readyz", s.handleReadyz)
 
-	// Client-facing API (auth required)
+	// Client-facing API (auth required) -- universal OpenAI-format
 	r.Group(func(r chi.Router) {
 		r.Use(s.authenticate)
 		r.Post("/v1/chat/completions", s.handleChatCompletion)
 		r.Post("/v1/embeddings", s.handleEmbeddings)
 		r.Get("/v1/models", s.handleListModels)
 	})
+
+	// Native API passthrough routes (per-provider auth normalization)
+	s.mountNativeRoutes(r)
 
 	return r
 }

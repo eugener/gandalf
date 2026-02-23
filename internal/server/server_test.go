@@ -68,8 +68,10 @@ func newTestHandler() http.Handler {
 
 	routerSvc := app.NewRouterService(&fakeRouteStore{})
 	return New(Deps{
-		Auth:  fakeAuth{},
-		Proxy: app.NewProxyService(reg, routerSvc),
+		Auth:      fakeAuth{},
+		Proxy:     app.NewProxyService(reg, routerSvc),
+		Providers: reg,
+		Router:    routerSvc,
 	})
 }
 

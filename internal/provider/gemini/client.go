@@ -15,6 +15,7 @@ import (
 	"github.com/tidwall/gjson"
 
 	gateway "github.com/eugener/gandalf/internal"
+	"github.com/eugener/gandalf/internal/provider"
 )
 
 const (
@@ -241,6 +242,14 @@ func (c *Client) ListModels(ctx context.Context) ([]string, error) {
 func (c *Client) HealthCheck(ctx context.Context) error {
 	_, err := c.ListModels(ctx)
 	return err
+}
+
+// ProxyRequest forwards a raw HTTP request to the Gemini API.
+// It implements the gateway.NativeProxy interface.
+func (c *Client) ProxyRequest(ctx context.Context, w http.ResponseWriter, r *http.Request, path string) error {
+	return provider.ForwardRequest(ctx, c.http, c.baseURL, func(h http.Header) {
+		h.Set("x-goog-api-key", c.apiKey)
+	}, w, r, path)
 }
 
 // apiError represents an error response from the Gemini API.

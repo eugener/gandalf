@@ -1,5 +1,6 @@
-// Package openai implements the gateway.Provider adapter for the OpenAI API.
-package openai
+// Package ollama implements the gateway.Provider and gateway.NativeProxy
+// adapters for local Ollama instances.
+package ollama
 
 import (
 	"bytes"
@@ -21,19 +22,21 @@ import (
 )
 
 const (
-	defaultBaseURL = "https://api.openai.com/v1"
-	providerName   = "openai"
+	defaultBaseURL = "http://localhost:11434"
+	providerName   = "ollama"
 )
 
-// Client is an OpenAI provider adapter that implements gateway.Provider.
+// Client is an Ollama provider adapter that implements gateway.Provider
+// and gateway.NativeProxy. It delegates translated (OpenAI-format) requests
+// to Ollama's OpenAI-compatible endpoint and raw native requests via ProxyRequest.
 type Client struct {
 	apiKey  string
 	baseURL string
 	http    *http.Client
 }
 
-// New creates an OpenAI Client with a tuned http.Client.
-// If baseURL is empty, it defaults to "https://api.openai.com/v1".
+// New creates an Ollama Client with a tuned http.Client.
+// If baseURL is empty, it defaults to "http://localhost:11434".
 // If resolver is non-nil, it wraps the transport's DialContext with cached DNS lookups.
 func New(apiKey, baseURL string, resolver *dnscache.Resolver) *Client {
 	if baseURL == "" {
@@ -45,7 +48,7 @@ func New(apiKey, baseURL string, resolver *dnscache.Resolver) *Client {
 		MaxIdleConnsPerHost: 100,
 		MaxConnsPerHost:     200,
 		IdleConnTimeout:     90 * time.Second,
-		ForceAttemptHTTP2:   true,
+		ForceAttemptHTTP2:   false, // Ollama is typically HTTP/1.1
 		TLSHandshakeTimeout: 5 * time.Second,
 	}
 	if resolver != nil {
@@ -73,22 +76,26 @@ func New(apiKey, baseURL string, resolver *dnscache.Resolver) *Client {
 // Name returns the provider identifier.
 func (c *Client) Name() string { return providerName }
 
-// ChatCompletion sends a non-streaming chat completion request to the OpenAI API.
+// openaiURL returns the OpenAI-compatible API base URL for Ollama.
+func (c *Client) openaiURL() string { return c.baseURL + "/v1" }
+
+// ChatCompletion sends a non-streaming chat completion request via Ollama's
+// OpenAI-compatible endpoint.
 func (c *Client) ChatCompletion(ctx context.Context, req *gateway.ChatRequest) (*gateway.ChatResponse, error) {
 	body, err := json.Marshal(req)
 	if err != nil {
-		return nil, fmt.Errorf("openai: marshal request: %w", err)
+		return nil, fmt.Errorf("ollama: marshal request: %w", err)
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/chat/completions", bytes.NewReader(body))
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.openaiURL()+"/chat/completions", bytes.NewReader(body))
 	if err != nil {
-		return nil, fmt.Errorf("openai: create request: %w", err)
+		return nil, fmt.Errorf("ollama: create request: %w", err)
 	}
 	c.setHeaders(httpReq)
 
 	resp, err := c.http.Do(httpReq)
 	if err != nil {
-		return nil, fmt.Errorf("openai: do request: %w", err)
+		return nil, fmt.Errorf("ollama: do request: %w", err)
 	}
 	defer resp.Body.Close()
 
@@ -98,37 +105,31 @@ func (c *Client) ChatCompletion(ctx context.Context, req *gateway.ChatRequest) (
 
 	var out gateway.ChatResponse
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return nil, fmt.Errorf("openai: decode response: %w", err)
+		return nil, fmt.Errorf("ollama: decode response: %w", err)
 	}
 	return &out, nil
 }
 
-// ChatCompletionStream sends a streaming chat completion request to the OpenAI API.
-// It returns a channel of StreamChunk. The raw SSE data payloads are forwarded
-// as-is in StreamChunk.Data (no JSON parsing on the hot path). The channel is
-// closed after sending a Done sentinel or an error chunk.
+// ChatCompletionStream sends a streaming chat completion request via Ollama's
+// OpenAI-compatible endpoint.
 func (c *Client) ChatCompletionStream(ctx context.Context, req *gateway.ChatRequest) (<-chan gateway.StreamChunk, error) {
-	// Force stream=true and request usage in the final chunk.
 	outReq := *req
 	outReq.Stream = true
-	if outReq.StreamOptions == nil {
-		outReq.StreamOptions = &gateway.StreamOptions{IncludeUsage: true}
-	}
 
 	body, err := json.Marshal(&outReq)
 	if err != nil {
-		return nil, fmt.Errorf("openai: marshal request: %w", err)
+		return nil, fmt.Errorf("ollama: marshal request: %w", err)
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/chat/completions", bytes.NewReader(body))
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.openaiURL()+"/chat/completions", bytes.NewReader(body))
 	if err != nil {
-		return nil, fmt.Errorf("openai: create request: %w", err)
+		return nil, fmt.Errorf("ollama: create request: %w", err)
 	}
 	c.setHeaders(httpReq)
 
 	resp, err := c.http.Do(httpReq)
 	if err != nil {
-		return nil, fmt.Errorf("openai: do request: %w", err)
+		return nil, fmt.Errorf("ollama: do request: %w", err)
 	}
 	if resp.StatusCode != http.StatusOK {
 		defer resp.Body.Close()
@@ -140,8 +141,7 @@ func (c *Client) ChatCompletionStream(ctx context.Context, req *gateway.ChatRequ
 	return ch, nil
 }
 
-// readSSEStream reads SSE lines from the response body and sends them as
-// StreamChunks. It closes ch when done.
+// readSSEStream reads SSE lines from the response body and sends them as StreamChunks.
 func (c *Client) readSSEStream(ctx context.Context, resp *http.Response, ch chan<- gateway.StreamChunk) {
 	defer close(ch)
 	defer resp.Body.Close()
@@ -159,7 +159,6 @@ func (c *Client) readSSEStream(ctx context.Context, resp *http.Response, ch chan
 		}
 
 		chunk := gateway.StreamChunk{Data: []byte(data)}
-		// Extract usage from final chunk if present.
 		if u := gjson.GetBytes(chunk.Data, "usage"); u.Exists() && u.Type == gjson.JSON {
 			var usage gateway.Usage
 			if json.Unmarshal([]byte(u.Raw), &usage) == nil && usage.TotalTokens > 0 {
@@ -175,26 +174,26 @@ func (c *Client) readSSEStream(ctx context.Context, resp *http.Response, ch chan
 		}
 	}
 	if err := scanner.Err(); err != nil {
-		ch <- gateway.StreamChunk{Err: fmt.Errorf("openai: read stream: %w", err)}
+		ch <- gateway.StreamChunk{Err: fmt.Errorf("ollama: read stream: %w", err)}
 	}
 }
 
-// Embeddings sends an embedding request to the OpenAI API.
+// Embeddings sends an embedding request via Ollama's OpenAI-compatible endpoint.
 func (c *Client) Embeddings(ctx context.Context, req *gateway.EmbeddingRequest) (*gateway.EmbeddingResponse, error) {
 	body, err := json.Marshal(req)
 	if err != nil {
-		return nil, fmt.Errorf("openai: marshal request: %w", err)
+		return nil, fmt.Errorf("ollama: marshal request: %w", err)
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/embeddings", bytes.NewReader(body))
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.openaiURL()+"/embeddings", bytes.NewReader(body))
 	if err != nil {
-		return nil, fmt.Errorf("openai: create request: %w", err)
+		return nil, fmt.Errorf("ollama: create request: %w", err)
 	}
 	c.setHeaders(httpReq)
 
 	resp, err := c.http.Do(httpReq)
 	if err != nil {
-		return nil, fmt.Errorf("openai: do request: %w", err)
+		return nil, fmt.Errorf("ollama: do request: %w", err)
 	}
 	defer resp.Body.Close()
 
@@ -204,29 +203,21 @@ func (c *Client) Embeddings(ctx context.Context, req *gateway.EmbeddingRequest) 
 
 	var out gateway.EmbeddingResponse
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return nil, fmt.Errorf("openai: decode response: %w", err)
+		return nil, fmt.Errorf("ollama: decode response: %w", err)
 	}
 	return &out, nil
 }
 
-// listModelsResponse is the envelope returned by GET /models.
-type listModelsResponse struct {
-	Data []struct {
-		ID string `json:"id"`
-	} `json:"data"`
-}
-
-// ListModels returns the IDs of all models available from the OpenAI API.
+// ListModels returns available models from the Ollama instance.
 func (c *Client) ListModels(ctx context.Context) ([]string, error) {
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/models", nil)
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/api/tags", nil)
 	if err != nil {
-		return nil, fmt.Errorf("openai: create request: %w", err)
+		return nil, fmt.Errorf("ollama: create request: %w", err)
 	}
-	c.setHeaders(httpReq)
 
 	resp, err := c.http.Do(httpReq)
 	if err != nil {
-		return nil, fmt.Errorf("openai: do request: %w", err)
+		return nil, fmt.Errorf("ollama: do request: %w", err)
 	}
 	defer resp.Body.Close()
 
@@ -234,46 +225,51 @@ func (c *Client) ListModels(ctx context.Context) ([]string, error) {
 		return nil, parseAPIError(resp)
 	}
 
-	var out listModelsResponse
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return nil, fmt.Errorf("openai: decode models response: %w", err)
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return nil, fmt.Errorf("ollama: read response: %w", err)
 	}
 
-	ids := make([]string, len(out.Data))
-	for i, m := range out.Data {
-		ids[i] = m.ID
-	}
+	var ids []string
+	gjson.ParseBytes(respBody).Get("models").ForEach(func(_, model gjson.Result) bool {
+		ids = append(ids, model.Get("name").String())
+		return true
+	})
 	return ids, nil
 }
 
-// HealthCheck verifies connectivity by listing models.
+// HealthCheck verifies connectivity to the Ollama instance.
 func (c *Client) HealthCheck(ctx context.Context) error {
 	_, err := c.ListModels(ctx)
 	return err
 }
 
-// ProxyRequest forwards a raw HTTP request to the OpenAI API.
+// ProxyRequest forwards a raw HTTP request to the Ollama API.
 // It implements the gateway.NativeProxy interface.
 func (c *Client) ProxyRequest(ctx context.Context, w http.ResponseWriter, r *http.Request, path string) error {
-	return provider.ForwardRequest(ctx, c.http, c.baseURL, func(h http.Header) {
-		h.Set("Authorization", "Bearer "+c.apiKey)
+	return provider.ForwardRequest(ctx, c.http, c.baseURL+"/api", func(h http.Header) {
+		if c.apiKey != "" {
+			h.Set("Authorization", "Bearer "+c.apiKey)
+		}
 	}, w, r, path)
 }
 
-// setHeaders applies common headers (auth + content-type) to an outbound request.
+// setHeaders applies common headers to an outbound request.
 func (c *Client) setHeaders(r *http.Request) {
-	r.Header.Set("Authorization", "Bearer "+c.apiKey)
+	if c.apiKey != "" {
+		r.Header.Set("Authorization", "Bearer "+c.apiKey)
+	}
 	r.Header.Set("Content-Type", "application/json")
 }
 
-// apiError represents an error response from the OpenAI API.
+// apiError represents an error response from the Ollama API.
 type apiError struct {
 	StatusCode int
 	Body       string
 }
 
 func (e *apiError) Error() string {
-	return fmt.Sprintf("openai: HTTP %d: %s", e.StatusCode, e.Body)
+	return fmt.Sprintf("ollama: HTTP %d: %s", e.StatusCode, e.Body)
 }
 
 // HTTPStatus returns the HTTP status code for failover decisions.

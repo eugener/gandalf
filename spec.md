@@ -9,26 +9,30 @@ Build a production-grade LLM gateway that unifies multiple providers (OpenAI, An
 ## Architecture
 
 ```
-Clients (OpenAI SDK, curl, etc.)
+Clients (OpenAI SDK, Claude CLI, Gemini CLI, Azure SDK, Ollama tools, curl)
          |
          v
-+------- Gandalf Gateway -------------------------------------------+
-|  Middleware Chain (zero-alloc hot path)                            |
-|  [Recovery] -> [RequestID] -> [OTel Span] -> [Metrics]            |
-|  -> [Logger] -> [Auth] -> [RateLimit] -> [Cache]                  |
-|         |                                                         |
-|  Router (chi)                                                     |
-|  /v1/chat/completions, /v1/embeddings, /v1/models                 |
-|  /admin/v1/*, /healthz, /readyz, /metrics                         |
-|         |                                                         |
-|  Proxy Handler -> RouterService -> Provider Adapters              |
-|                                    [OpenAI | Anthropic | Gemini]  |
-|         |                                                         |
-|  SQLite (config, keys, usage)    In-Memory Cache (W-TinyLFU)      |
-+-------------------------------------------------------------------+
++------- Gandalf Gateway ---------------------------------------------------+
+|  Middleware Chain (zero-alloc hot path)                                    |
+|  [Recovery] -> [RequestID] -> [OTel Span] -> [Metrics]                    |
+|  -> [Logger] -> [NormalizeAuth] -> [Auth] -> [RateLimit] -> [Cache]       |
+|         |                                                                 |
+|  Router (chi)                                                             |
+|  Universal: /v1/chat/completions, /v1/embeddings, /v1/models              |
+|  Native:    /v1/messages, /v1beta/models/*, /openai/deployments/*,        |
+|             /api/chat, /api/embed, /api/tags                              |
+|  Admin:     /admin/v1/*                                                   |
+|  System:    /healthz, /readyz, /metrics                                   |
+|         |                                                                 |
+|  Universal: Proxy Handler -> RouterService -> Provider Adapters           |
+|  Native:    NativeProxy passthrough (raw HTTP forwarding, zero xlate)     |
+|             [OpenAI | Anthropic | Gemini | Ollama]                        |
+|         |                                                                 |
+|  SQLite (config, keys, usage)    In-Memory Cache (W-TinyLFU)              |
++----------------------------------------------------------------------- --+
          |
          v
-OpenAI API / Anthropic API / Gemini API
+OpenAI API / Anthropic API / Gemini API / Ollama (local)
 ```
 
 ## Latency Minimization Strategy
@@ -216,6 +220,12 @@ type StreamChunk struct {
     Usage *Usage  // non-nil on final chunk
     Done  bool
     Err   error
+}
+
+// Optional interface for native API passthrough (checked via type assertion).
+// Providers implement this to support raw HTTP forwarding without translation.
+type NativeProxy interface {
+    ProxyRequest(ctx context.Context, w http.ResponseWriter, r *http.Request, path string) error
 }
 
 // --- Multi-tenant identity ---
@@ -417,10 +427,22 @@ Organization (acme)         rpm=1000, tpm=100000, models=[gpt-4o, claude-*]
 
 ## API Surface
 
-**Client-facing (OpenAI-compatible):**
+**Client-facing -- Universal API (OpenAI-compatible, translated):**
 - `POST /v1/chat/completions` -- streaming and non-streaming
 - `POST /v1/embeddings`
 - `GET /v1/models`
+
+**Client-facing -- Native API Passthrough (raw forwarding, zero translation):**
+- `POST /v1/messages` -- Anthropic Messages API
+- `POST /v1beta/models/{model}:generateContent` -- Gemini
+- `POST /v1beta/models/{model}:streamGenerateContent` -- Gemini streaming
+- `POST /v1beta/models/{model}:embedContent` -- Gemini embeddings
+- `GET /v1beta/models` -- Gemini list models
+- `POST /openai/deployments/{dep}/chat/completions` -- Azure OpenAI
+- `POST /openai/deployments/{dep}/embeddings` -- Azure OpenAI embeddings
+- `POST /api/chat` -- Ollama native chat
+- `POST /api/embed` -- Ollama native embeddings
+- `GET /api/tags` -- Ollama list models
 
 **Admin (requires admin role):**
 - `/admin/v1/providers` -- CRUD
@@ -711,8 +733,8 @@ Stdlib: `net/http`, `database/sql`, `crypto/sha256`, `crypto/subtle`, `sync`, `c
 **Phase 1 -- Foundation (MVP):**
 Project skeleton, config, SQLite + migrations, OpenAI adapter, `/v1/chat/completions` (non-streaming), API key auth (single org), health endpoint, build pipeline.
 
-**Phase 2 -- Streaming + Multi-Provider (DONE):**
-SSE streaming (channel-based, 8-buffer), Anthropic adapter (Messages API, SSE event state machine), Gemini adapter (generateContent, EOF-terminated SSE), priority failover routing (sorted targets, otter-cached), `/v1/embeddings`, `/v1/models`. Shared `dnscache.Resolver`, `gjson` for response translation. `testutil/` package with reusable fakes. Performance: route target caching (-12 allocs), bundled request context (-2 allocs), `GOEXPERIMENT=jsonv2` (-1-8 allocs). Baseline: ~53 allocs/op ChatCompletion, ~25 allocs/op Healthz.
+**Phase 2 -- Streaming + Multi-Provider + Native Passthrough (DONE):**
+SSE streaming (channel-based, 8-buffer), Anthropic adapter (Messages API, SSE event state machine), Gemini adapter (generateContent, EOF-terminated SSE), Ollama adapter (OpenAI-compat + native API), priority failover routing (sorted targets, otter-cached), `/v1/embeddings`, `/v1/models`. Native API passthrough: `NativeProxy` interface, `ForwardRequest` shared helper, `normalizeAuth` middleware. Native routes: `/v1/messages` (Anthropic), `/v1beta/models/*` (Gemini), `/openai/deployments/*` (Azure OpenAI), `/api/*` (Ollama). Shared `dnscache.Resolver`, `gjson` for response translation + model extraction. `testutil/` package with reusable fakes. Performance: route target caching (-12 allocs), bundled request context (-2 allocs), `GOEXPERIMENT=jsonv2` (-1-8 allocs). Baseline: ~53 allocs/op ChatCompletion, ~25 allocs/op Healthz.
 
 **Phase 3 -- Rate Limiting + Caching:**
 Token-bucket rate limiter (dual RPM+TPM), exact-match cache, token counting, async usage recording, quota enforcement.

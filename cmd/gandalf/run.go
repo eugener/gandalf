@@ -18,6 +18,7 @@ import (
 	"github.com/eugener/gandalf/internal/provider"
 	"github.com/eugener/gandalf/internal/provider/anthropic"
 	"github.com/eugener/gandalf/internal/provider/gemini"
+	"github.com/eugener/gandalf/internal/provider/ollama"
 	"github.com/eugener/gandalf/internal/provider/openai"
 	"github.com/eugener/gandalf/internal/server"
 	"github.com/eugener/gandalf/internal/storage/sqlite"
@@ -68,6 +69,8 @@ func run(configPath string) error {
 			reg.Register(p.Name, anthropic.New(p.APIKey, p.BaseURL, dnsResolver))
 		case "gemini":
 			reg.Register(p.Name, gemini.New(p.APIKey, p.BaseURL, dnsResolver))
+		case "ollama":
+			reg.Register(p.Name, ollama.New(p.APIKey, p.BaseURL, dnsResolver))
 		default:
 			slog.Warn("unknown provider, skipping", "name", p.Name)
 		}
@@ -88,6 +91,8 @@ func run(configPath string) error {
 	handler := server.New(server.Deps{
 		Auth:       apiKeyAuth,
 		Proxy:      proxySvc,
+		Providers:  reg,
+		Router:     routerSvc,
 		Keys:       keys,
 		ReadyCheck: store.Ping,
 	})

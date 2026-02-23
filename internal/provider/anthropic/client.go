@@ -14,6 +14,7 @@ import (
 	"github.com/rs/dnscache"
 
 	gateway "github.com/eugener/gandalf/internal"
+	"github.com/eugener/gandalf/internal/provider"
 )
 
 const (
@@ -160,6 +161,15 @@ func (c *Client) HealthCheck(ctx context.Context) error {
 	// Use a minimal messages request to check connectivity.
 	_, err := c.ListModels(ctx)
 	return err
+}
+
+// ProxyRequest forwards a raw HTTP request to the Anthropic API.
+// It implements the gateway.NativeProxy interface.
+func (c *Client) ProxyRequest(ctx context.Context, w http.ResponseWriter, r *http.Request, path string) error {
+	return provider.ForwardRequest(ctx, c.http, c.baseURL, func(h http.Header) {
+		h.Set("x-api-key", c.apiKey)
+		h.Set("anthropic-version", anthropicVersion)
+	}, w, r, path)
 }
 
 // setHeaders applies Anthropic-specific headers to an outbound request.
