@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -47,6 +48,16 @@ func run(configPath string) error {
 	ctx := context.Background()
 	if err := config.Bootstrap(ctx, cfg, store); err != nil {
 		return err
+	}
+
+	// Log seeded API keys (names only, never log key material).
+	for _, k := range cfg.Keys {
+		if k.Key == "" {
+			slog.Warn("api key empty, skipped", "name", k.Name)
+			continue
+		}
+		valid := strings.HasPrefix(k.Key, gateway.APIKeyPrefix)
+		slog.Info("api key configured", "name", k.Name, "valid_prefix", valid)
 	}
 
 	// Shared DNS cache for all provider HTTP clients.
