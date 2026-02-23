@@ -90,6 +90,7 @@ func (s *FakeStore) ListProviders(context.Context) ([]*gateway.ProviderConfig, e
 func (s *FakeStore) UpdateProvider(context.Context, *gateway.ProviderConfig) error            { return nil }
 func (s *FakeStore) DeleteProvider(context.Context, string) error                             { return nil }
 func (s *FakeStore) InsertUsage(context.Context, []gateway.UsageRecord) error                 { return nil }
+func (s *FakeStore) SumUsageCost(context.Context, string) (float64, error)                   { return 0, nil }
 func (s *FakeStore) CreateOrg(context.Context, *gateway.Organization) error                   { return nil }
 func (s *FakeStore) GetOrg(context.Context, string) (*gateway.Organization, error)            { return nil, gateway.ErrNotFound }
 func (s *FakeStore) ListOrgs(context.Context, int, int) ([]*gateway.Organization, error)      { return nil, nil }

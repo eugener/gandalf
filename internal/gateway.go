@@ -158,12 +158,16 @@ type APIKey struct {
 // Populated by either JWT or API key auth.
 type Identity struct {
 	Subject    string     `json:"subject"`     // JWT sub or key prefix
+	KeyID      string     `json:"key_id"`      // API key ID for per-key bucketing
 	UserID     string     `json:"user_id"`
 	TeamID     string     `json:"team_id"`
 	OrgID      string     `json:"org_id"`
 	Role       string     `json:"role"`        // "admin", "member", "viewer", "service_account"
 	Perms      Permission `json:"-"`           // resolved bitmask
 	AuthMethod string     `json:"auth_method"` // "jwt" or "apikey"
+	RPMLimit   int64      `json:"-"`           // effective RPM limit (0 = unlimited)
+	TPMLimit   int64      `json:"-"`           // effective TPM limit (0 = unlimited)
+	MaxBudget  float64    `json:"-"`           // max spend USD (0 = unlimited)
 }
 
 // --- RBAC ---

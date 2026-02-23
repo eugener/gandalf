@@ -3,6 +3,7 @@ package server
 import (
 	"encoding/json"
 	"net/http"
+	"time"
 
 	gateway "github.com/eugener/gandalf/internal"
 )
@@ -15,12 +16,24 @@ func (s *server) handleEmbeddings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// TPM rate limit for embeddings (rough estimate).
+	identity := gateway.IdentityFromContext(r.Context())
+	estimated := int64(100)
+	if !s.consumeTPM(w, identity, estimated) {
+		return
+	}
+
+	start := time.Now()
 	resp, err := s.deps.Proxy.Embeddings(r.Context(), &req)
+	elapsed := time.Since(start)
 	if err != nil {
 		status := errorStatus(err)
 		writeJSON(w, status, errorResponse(err.Error()))
 		return
 	}
+
+	s.adjustTPM(identity, estimated, resp.Usage)
+	s.recordUsage(r, req.Model, resp.Usage, elapsed, false)
 
 	writeJSON(w, http.StatusOK, resp)
 }

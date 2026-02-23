@@ -7,7 +7,10 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/google/uuid"
+
 	gateway "github.com/eugener/gandalf/internal"
+	"github.com/eugener/gandalf/internal/ratelimit"
 )
 
 func (s *server) handleChatCompletion(w http.ResponseWriter, r *http.Request) {
@@ -17,23 +20,59 @@ func (s *server) handleChatCompletion(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if req.Stream {
-		s.handleChatCompletionStream(w, r, &req)
+	// TPM rate limit check (after body decode).
+	identity := gateway.IdentityFromContext(r.Context())
+	estimated := int64(100)
+	if s.deps.TokenCounter != nil {
+		estimated = int64(s.deps.TokenCounter.EstimateRequest(req.Model, req.Messages))
+	}
+
+	if !s.consumeTPM(w, identity, estimated) {
 		return
 	}
 
+	// Cache check (non-streaming only).
+	if !req.Stream && s.deps.Cache != nil && isCacheable(&req) {
+		key := cacheKey(&req)
+		if data, ok := s.deps.Cache.Get(r.Context(), key); ok {
+			s.recordUsage(r, req.Model, nil, 0, true)
+			w.Header()["Content-Type"] = jsonCT
+			w.WriteHeader(http.StatusOK)
+			w.Write(data)
+			return
+		}
+	}
+
+	if req.Stream {
+		s.handleChatCompletionStream(w, r, &req, identity, estimated)
+		return
+	}
+
+	start := time.Now()
 	resp, err := s.deps.Proxy.ChatCompletion(r.Context(), &req)
+	elapsed := time.Since(start)
 	if err != nil {
 		status := errorStatus(err)
 		writeJSON(w, status, errorResponse(err.Error()))
 		return
 	}
 
+	s.adjustTPM(identity, estimated, resp.Usage)
+
+	// Cache store.
+	if s.deps.Cache != nil && isCacheable(&req) {
+		if data, err := json.Marshal(resp); err == nil {
+			s.deps.Cache.Set(r.Context(), cacheKey(&req), data, s.cacheTTL(&req))
+		}
+	}
+
+	s.recordUsage(r, req.Model, resp.Usage, elapsed, false)
 	writeJSON(w, http.StatusOK, resp)
 }
 
 // handleChatCompletionStream handles SSE streaming chat completion requests.
-func (s *server) handleChatCompletionStream(w http.ResponseWriter, r *http.Request, req *gateway.ChatRequest) {
+func (s *server) handleChatCompletionStream(w http.ResponseWriter, r *http.Request, req *gateway.ChatRequest, identity *gateway.Identity, estimated int64) {
+	start := time.Now()
 	ch, err := s.deps.Proxy.ChatCompletionStream(r.Context(), req)
 	if err != nil {
 		status := errorStatus(err)
@@ -52,12 +91,14 @@ func (s *server) handleChatCompletionStream(w http.ResponseWriter, r *http.Reque
 	keepAlive := time.NewTicker(15 * time.Second)
 	defer keepAlive.Stop()
 
+	var usage *gateway.Usage
 	for {
 		select {
 		case chunk, ok := <-ch:
 			if !ok {
 				writeSSEDone(w)
 				flusher.Flush()
+				s.finishStream(r, req, identity, estimated, usage, start)
 				return
 			}
 			if chunk.Err != nil {
@@ -66,11 +107,16 @@ func (s *server) handleChatCompletionStream(w http.ResponseWriter, r *http.Reque
 				)
 				writeSSEDone(w)
 				flusher.Flush()
+				s.finishStream(r, req, identity, estimated, usage, start)
 				return
+			}
+			if chunk.Usage != nil {
+				usage = chunk.Usage
 			}
 			if chunk.Done {
 				writeSSEDone(w)
 				flusher.Flush()
+				s.finishStream(r, req, identity, estimated, usage, start)
 				return
 			}
 			writeSSEData(w, chunk.Data)
@@ -84,6 +130,98 @@ func (s *server) handleChatCompletionStream(w http.ResponseWriter, r *http.Reque
 			return
 		}
 	}
+}
+
+// finishStream adjusts TPM and records usage after stream completion.
+func (s *server) finishStream(r *http.Request, req *gateway.ChatRequest, identity *gateway.Identity, estimated int64, usage *gateway.Usage, start time.Time) {
+	s.adjustTPM(identity, estimated, usage)
+	s.recordUsage(r, req.Model, usage, time.Since(start), false)
+}
+
+// getLimiter returns the rate limiter for the identity, or nil if not configured.
+func (s *server) getLimiter(id *gateway.Identity) *ratelimit.Limiter {
+	if s.deps.RateLimiter == nil || id == nil || id.KeyID == "" {
+		return nil
+	}
+	limits := ratelimit.Limits{RPM: id.RPMLimit, TPM: id.TPMLimit}
+	if limits.RPM == 0 && limits.TPM == 0 {
+		return nil
+	}
+	return s.deps.RateLimiter.GetOrCreate(id.KeyID, limits)
+}
+
+// consumeTPM checks the TPM limit, sets headers, and returns false if denied.
+func (s *server) consumeTPM(w http.ResponseWriter, identity *gateway.Identity, estimated int64) bool {
+	if limiter := s.getLimiter(identity); limiter != nil {
+		result := limiter.ConsumeTPM(estimated)
+		setTPMHeaders(w, result)
+		if !result.Allowed {
+			writeRateLimitError(w, result)
+			return false
+		}
+	}
+	return true
+}
+
+// adjustTPM corrects the TPM bucket after receiving actual usage.
+func (s *server) adjustTPM(identity *gateway.Identity, estimated int64, usage *gateway.Usage) {
+	if usage == nil {
+		return
+	}
+	if limiter := s.getLimiter(identity); limiter != nil {
+		limiter.AdjustTPM(estimated - int64(usage.TotalTokens))
+	}
+}
+
+// recordUsage sends a usage record to the async recorder.
+func (s *server) recordUsage(r *http.Request, model string, usage *gateway.Usage, elapsed time.Duration, cached bool) {
+	if s.deps.Usage == nil {
+		return
+	}
+	identity := gateway.IdentityFromContext(r.Context())
+	rec := gateway.UsageRecord{
+		ID:         uuid.Must(uuid.NewV7()).String(),
+		Model:      model,
+		LatencyMs:  int(elapsed.Milliseconds()),
+		StatusCode: http.StatusOK,
+		RequestID:  gateway.RequestIDFromContext(r.Context()),
+		CreatedAt:  time.Now(),
+		Cached:     cached,
+	}
+	if identity != nil {
+		rec.KeyID = identity.KeyID
+		rec.UserID = identity.UserID
+		rec.TeamID = identity.TeamID
+		rec.OrgID = identity.OrgID
+	}
+	if usage != nil {
+		rec.PromptTokens = usage.PromptTokens
+		rec.CompletionTokens = usage.CompletionTokens
+		rec.TotalTokens = usage.TotalTokens
+	}
+	// Quota consumption.
+	if s.deps.Quota != nil && identity != nil && identity.MaxBudget > 0 && usage != nil {
+		cost := estimateCost(model, usage)
+		rec.CostUSD = cost
+		s.deps.Quota.Consume(identity.KeyID, cost)
+	}
+	s.deps.Usage.Record(rec)
+}
+
+// cacheTTL returns the cache TTL for a request, checking route config or falling back to default.
+func (s *server) cacheTTL(req *gateway.ChatRequest) time.Duration {
+	// Default 5 minutes; route-level TTL would be resolved here in the future.
+	return 5 * time.Minute
+}
+
+// estimateCost provides a rough USD cost estimate based on model and token counts.
+// These are approximate and should be replaced with a proper pricing table.
+func estimateCost(model string, usage *gateway.Usage) float64 {
+	if usage == nil {
+		return 0
+	}
+	// Default: $0.01 per 1K tokens (rough average).
+	return float64(usage.TotalTokens) * 0.00001
 }
 
 type apiError struct {

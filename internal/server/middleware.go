@@ -3,12 +3,23 @@ package server
 import (
 	"log/slog"
 	"net/http"
+	"strconv"
 	"sync"
 	"time"
 
 	"github.com/google/uuid"
 
 	gateway "github.com/eugener/gandalf/internal"
+	"github.com/eugener/gandalf/internal/ratelimit"
+)
+
+// Pre-allocated header key strings in canonical MIME form.
+const (
+	hdrRateLimitRequests    = "X-Ratelimit-Limit-Requests"
+	hdrRemainingRequests    = "X-Ratelimit-Remaining-Requests"
+	hdrRateLimitTokens      = "X-Ratelimit-Limit-Tokens"
+	hdrRemainingTokens      = "X-Ratelimit-Remaining-Tokens"
+	hdrRetryAfter           = "Retry-After"
 )
 
 // statusWriterPool eliminates 1 alloc/req from &statusWriter{} escaping to heap.
@@ -136,4 +147,74 @@ func (sw *statusWriter) Flush() {
 // and similar utilities to find interface implementations.
 func (sw *statusWriter) Unwrap() http.ResponseWriter {
 	return sw.ResponseWriter
+}
+
+// rateLimit enforces per-key RPM rate limiting and quota checks.
+// TPM limiting is handled in the handlers after body decode.
+func (s *server) rateLimit(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		identity := gateway.IdentityFromContext(r.Context())
+		if identity == nil || identity.KeyID == "" {
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		// Quota check.
+		if s.deps.Quota != nil && identity.MaxBudget > 0 {
+			if !s.deps.Quota.Check(identity.KeyID, identity.MaxBudget) {
+				writeJSON(w, http.StatusTooManyRequests, errorResponse("quota exceeded"))
+				return
+			}
+		}
+
+		// RPM check.
+		if s.deps.RateLimiter == nil {
+			next.ServeHTTP(w, r)
+			return
+		}
+		limits := ratelimit.Limits{RPM: identity.RPMLimit, TPM: identity.TPMLimit}
+		if limits.RPM == 0 && limits.TPM == 0 {
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		limiter := s.deps.RateLimiter.GetOrCreate(identity.KeyID, limits)
+		result := limiter.AllowRPM()
+		setRPMHeaders(w, result)
+
+		if !result.Allowed {
+			writeRateLimitError(w, result)
+			return
+		}
+
+		next.ServeHTTP(w, r)
+	})
+}
+
+// setRPMHeaders sets RPM rate limit headers on the response.
+func setRPMHeaders(w http.ResponseWriter, r ratelimit.Result) {
+	if r.Limit == 0 {
+		return
+	}
+	h := w.Header()
+	h[hdrRateLimitRequests] = []string{strconv.FormatInt(r.Limit, 10)}
+	h[hdrRemainingRequests] = []string{strconv.FormatInt(r.Remaining, 10)}
+}
+
+// setTPMHeaders sets TPM rate limit headers on the response.
+func setTPMHeaders(w http.ResponseWriter, r ratelimit.Result) {
+	if r.Limit == 0 {
+		return
+	}
+	h := w.Header()
+	h[hdrRateLimitTokens] = []string{strconv.FormatInt(r.Limit, 10)}
+	h[hdrRemainingTokens] = []string{strconv.FormatInt(r.Remaining, 10)}
+}
+
+// writeRateLimitError writes a 429 response with Retry-After header.
+func writeRateLimitError(w http.ResponseWriter, r ratelimit.Result) {
+	if r.RetryAfterSeconds > 0 {
+		w.Header()[hdrRetryAfter] = []string{strconv.Itoa(int(r.RetryAfterSeconds) + 1)}
+	}
+	writeJSON(w, http.StatusTooManyRequests, errorResponse("rate limit exceeded"))
 }

@@ -103,6 +103,15 @@ routes:
         priority: 1
     strategy: priority
 
+rate_limits:
+  default_rpm: 60     # requests per minute per key (0 = unlimited)
+  default_tpm: 100000 # tokens per minute per key (0 = unlimited)
+
+cache:
+  enabled: true
+  max_size: 10000     # max cached responses
+  default_ttl: 5m     # default TTL for cached responses
+
 keys:
   - name: default-admin
     key: "${GANDALF_ADMIN_KEY}"

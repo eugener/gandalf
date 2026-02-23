@@ -14,6 +14,7 @@ type FakeAuth struct{}
 func (FakeAuth) Authenticate(_ context.Context, _ *http.Request) (*gateway.Identity, error) {
 	return &gateway.Identity{
 		Subject:    "test",
+		KeyID:      "key-test-1",
 		OrgID:      "default",
 		Role:       "admin",
 		Perms:      gateway.RolePermissions["admin"],

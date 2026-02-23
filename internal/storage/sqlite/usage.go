@@ -41,3 +41,12 @@ func (s *Store) InsertUsage(ctx context.Context, records []gateway.UsageRecord) 
 	_, err := s.write.ExecContext(ctx, query, args...)
 	return err
 }
+
+// SumUsageCost returns the total accumulated cost for a given API key.
+func (s *Store) SumUsageCost(ctx context.Context, keyID string) (float64, error) {
+	var total float64
+	err := s.read.QueryRowContext(ctx,
+		`SELECT COALESCE(SUM(cost_usd), 0) FROM usage_records WHERE key_id = ?`, keyID,
+	).Scan(&total)
+	return total, err
+}

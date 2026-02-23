@@ -107,8 +107,9 @@ func (a *APIKeyAuth) Authenticate(ctx context.Context, r *http.Request) (*gatewa
 func buildIdentity(key *gateway.APIKey) *gateway.Identity {
 	role := "member"
 	perms := gateway.RolePermissions[role]
-	return &gateway.Identity{
+	id := &gateway.Identity{
 		Subject:    key.KeyPrefix,
+		KeyID:      key.ID,
 		OrgID:      key.OrgID,
 		TeamID:     key.TeamID,
 		UserID:     key.UserID,
@@ -116,4 +117,14 @@ func buildIdentity(key *gateway.APIKey) *gateway.Identity {
 		Perms:      perms,
 		AuthMethod: "apikey",
 	}
+	if key.RPMLimit != nil {
+		id.RPMLimit = *key.RPMLimit
+	}
+	if key.TPMLimit != nil {
+		id.TPMLimit = *key.TPMLimit
+	}
+	if key.MaxBudget != nil {
+		id.MaxBudget = *key.MaxBudget
+	}
+	return id
 }

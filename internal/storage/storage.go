@@ -38,6 +38,7 @@ type RouteStore interface {
 // UsageStore manages usage record persistence.
 type UsageStore interface {
 	InsertUsage(ctx context.Context, records []gateway.UsageRecord) error
+	SumUsageCost(ctx context.Context, keyID string) (float64, error)
 }
 
 // OrgStore manages organization and team persistence.

@@ -13,13 +13,14 @@ gandalf/
     auth/
       apikey.go                    # API key auth: hash -> otter cache -> DB fallback
     server/
-      server.go                    # New(Deps) http.Handler, route registration (chi)
-      proxy.go                     # handleChatCompletion (non-stream + stream branch) + helpers
+      server.go                    # New(Deps) http.Handler, route registration (chi), dep interfaces
+      proxy.go                     # handleChatCompletion (non-stream + stream), TPM consume/adjust, usage recording, cache
+      cache.go                     # cacheKey (SHA-256), isCacheable, Cache interface
       native.go                    # Native API passthrough: handleNativeProxy, normalizeAuth, route mounting
       sse.go                       # SSE write helpers: writeSSEHeaders, writeSSEData, writeSSEDone, writeSSEKeepAlive
-      embeddings.go                # handleEmbeddings handler
+      embeddings.go                # handleEmbeddings handler with TPM + usage recording
       models.go                    # handleListModels handler (aggregates from all providers)
-      middleware.go                # recovery, requestID, logging, authenticate (statusWriter supports Flush)
+      middleware.go                # recovery, requestID, logging, authenticate, rateLimit (RPM), quota, headers
       health.go                    # handleHealthz, handleReadyz
       server_test.go               # Handler tests with inline fakes
       server_bench_test.go         # Benchmarks: ChatCompletion, Stream, Healthz
@@ -55,8 +56,25 @@ gandalf/
       ollama/
         client.go                  # Ollama adapter: ChatCompletion, Stream, Embeddings, ListModels, ProxyRequest + dnscache
         client_test.go             # Completion, stream, list models, proxy request tests
+    ratelimit/
+      ratelimit.go                 # Dual token bucket (RPM+TPM), Limiter, Registry
+      quota.go                     # QuotaTracker: in-memory budget tracking
+      *_test.go
+    cache/
+      cache.go                     # Cache interface (Get/Set/Delete/Purge)
+      memory.go                    # In-memory W-TinyLFU cache (otter) with per-entry TTL
+      memory_test.go
+    tokencount/
+      tokencount.go                # Token estimation (~4 chars/token heuristic)
+      tokencount_test.go
+    worker/
+      worker.go                    # Worker interface: Run(ctx) error
+      runner.go                    # errgroup-based runner, cancel-on-first-error
+      usage_recorder.go            # Buffered channel -> batch DB flush (100 records or 5s)
+      quota_sync.go                # Periodic quota counter reload from DB (60s)
+      *_test.go
     storage/
-      storage.go                   # Store interfaces
+      storage.go                   # Store interfaces (APIKeyStore, UsageStore, etc.)
       sqlite/
         db.go, apikey.go, provider.go, route.go, org.go, usage.go
         sqlite_test.go

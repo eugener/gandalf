@@ -16,14 +16,18 @@ import (
 	gateway "github.com/eugener/gandalf/internal"
 	"github.com/eugener/gandalf/internal/app"
 	"github.com/eugener/gandalf/internal/auth"
+	"github.com/eugener/gandalf/internal/cache"
 	"github.com/eugener/gandalf/internal/config"
 	"github.com/eugener/gandalf/internal/provider"
 	"github.com/eugener/gandalf/internal/provider/anthropic"
 	"github.com/eugener/gandalf/internal/provider/gemini"
 	"github.com/eugener/gandalf/internal/provider/ollama"
 	"github.com/eugener/gandalf/internal/provider/openai"
+	"github.com/eugener/gandalf/internal/ratelimit"
 	"github.com/eugener/gandalf/internal/server"
 	"github.com/eugener/gandalf/internal/storage/sqlite"
+	"github.com/eugener/gandalf/internal/tokencount"
+	"github.com/eugener/gandalf/internal/worker"
 )
 
 func run(configPath string) error {
@@ -117,17 +121,57 @@ func run(configPath string) error {
 
 	routerSvc := app.NewRouterService(store)
 	proxySvc := app.NewProxyService(reg, routerSvc)
-
 	keys := app.NewKeyManager(store)
+
+	// Usage recorder (async batch flush to DB).
+	usageRecorder := worker.NewUsageRecorder(store)
+
+	// Rate limiter.
+	rateLimiter := ratelimit.NewRegistry()
+	slog.Info("rate limits configured",
+		"default_rpm", cfg.RateLimits.DefaultRPM,
+		"default_tpm", cfg.RateLimits.DefaultTPM,
+	)
+
+	// Token counter.
+	tokenCounter := tokencount.NewCounter()
+
+	// Response cache.
+	var responseCache server.Cache
+	if cfg.Cache.Enabled {
+		mc, cacheErr := cache.NewMemory(cfg.Cache.MaxSize, cfg.Cache.DefaultTTL)
+		if cacheErr != nil {
+			return cacheErr
+		}
+		responseCache = mc
+		slog.Info("response cache enabled",
+			"max_size", cfg.Cache.MaxSize,
+			"default_ttl", cfg.Cache.DefaultTTL,
+		)
+	}
+
+	// Quota tracker.
+	quotaTracker := ratelimit.NewQuotaTracker()
+
+	// Workers.
+	workers := []worker.Worker{usageRecorder}
+	workers = append(workers, worker.NewQuotaSyncWorker(quotaTracker, store))
+
+	runner := worker.NewRunner(workers...)
 
 	// Create HTTP server
 	handler := server.New(server.Deps{
-		Auth:       apiKeyAuth,
-		Proxy:      proxySvc,
-		Providers:  reg,
-		Router:     routerSvc,
-		Keys:       keys,
-		ReadyCheck: store.Ping,
+		Auth:         apiKeyAuth,
+		Proxy:        proxySvc,
+		Providers:    reg,
+		Router:       routerSvc,
+		Keys:         keys,
+		ReadyCheck:   store.Ping,
+		Usage:        usageRecorder,
+		RateLimiter:  rateLimiter,
+		TokenCounter: tokenCounter,
+		Cache:        responseCache,
+		Quota:        quotaTracker,
 	})
 
 	srv := &http.Server{
@@ -136,6 +180,29 @@ func run(configPath string) error {
 		ReadTimeout:  cfg.Server.ReadTimeout,
 		WriteTimeout: cfg.Server.WriteTimeout,
 	}
+
+	// Start background workers.
+	workerCtx, workerCancel := context.WithCancel(context.Background())
+	workerDone := make(chan error, 1)
+	go func() {
+		workerDone <- runner.Run(workerCtx)
+	}()
+
+	// Periodic eviction of stale rate limiters.
+	go func() {
+		t := time.NewTicker(10 * time.Minute)
+		defer t.Stop()
+		for {
+			select {
+			case <-workerCtx.Done():
+				return
+			case <-t.C:
+				if n := rateLimiter.EvictStale(time.Now().Add(-1 * time.Hour)); n > 0 {
+					slog.Info("rate limiter eviction", "evicted", n)
+				}
+			}
+		}
+	}()
 
 	// Graceful shutdown
 	errCh := make(chan error, 1)
@@ -163,15 +230,23 @@ func run(configPath string) error {
 	case sig := <-sigCh:
 		slog.Info("shutting down", "signal", sig)
 	case err := <-errCh:
+		workerCancel()
 		return err
 	}
 
-	// Shutdown
+	// Shutdown HTTP first, then workers (so in-flight requests finish recording).
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), cfg.Server.ShutdownTimeout)
 	defer cancel()
 
 	if err := srv.Shutdown(shutdownCtx); err != nil {
+		workerCancel()
 		return err
+	}
+
+	// Cancel workers and wait for drain.
+	workerCancel()
+	if err := <-workerDone; err != nil {
+		slog.Error("worker shutdown error", "error", err)
 	}
 
 	slog.Info("gandalf stopped")

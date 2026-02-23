@@ -25,6 +25,7 @@ func (s *server) mountNativeRoutes(r chi.Router) {
 	r.Group(func(r chi.Router) {
 		r.Use(normalizeAuth("X-Api-Key"))
 		r.Use(s.authenticate)
+		r.Use(s.rateLimit)
 		r.Post("/v1/messages", s.handleNativeProxy(
 			"anthropic",
 			func(_ *http.Request) string { return "/messages" },
@@ -38,6 +39,7 @@ func (s *server) mountNativeRoutes(r chi.Router) {
 	r.Group(func(r chi.Router) {
 		r.Use(normalizeAuth("X-Goog-Api-Key"))
 		r.Use(s.authenticate)
+		r.Use(s.rateLimit)
 
 		// generateContent, streamGenerateContent, embedContent
 		r.Post("/v1beta/models/{model}:{action}", s.handleNativeProxy(
@@ -60,6 +62,7 @@ func (s *server) mountNativeRoutes(r chi.Router) {
 	r.Group(func(r chi.Router) {
 		r.Use(normalizeAuth("Api-Key"))
 		r.Use(s.authenticate)
+		r.Use(s.rateLimit)
 
 		r.Post("/openai/deployments/{deployment}/chat/completions", s.handleNativeProxy(
 			"openai",
@@ -80,6 +83,7 @@ func (s *server) mountNativeRoutes(r chi.Router) {
 	// --- Ollama native: /api/* ---
 	r.Group(func(r chi.Router) {
 		r.Use(s.authenticate)
+		r.Use(s.rateLimit)
 
 		r.Post("/api/chat", s.handleNativeProxy(
 			"ollama",

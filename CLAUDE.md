@@ -18,13 +18,17 @@ All make targets set `GOEXPERIMENT=jsonv2` for lower alloc counts in JSON-heavy 
 
 ## Architecture
 
-Hexagonal architecture. Domain types at `internal/gateway.go`, interfaces at consumer level. Multi-provider support (OpenAI, Anthropic, Gemini, Ollama), priority failover routing, SSE streaming, native API passthrough.
+Hexagonal architecture. Domain types at `internal/gateway.go`, interfaces at consumer level. Multi-provider support (OpenAI, Anthropic, Gemini, Ollama), priority failover routing, SSE streaming, native API passthrough. Per-key rate limiting, response caching, async usage recording, quota enforcement.
 
 Key packages:
 - `internal/gateway.go` -- domain types + interfaces (no project imports)
-- `internal/server/` -- HTTP handlers + middleware (chi), SSE streaming, native passthrough
+- `internal/server/` -- HTTP handlers + middleware (chi), SSE streaming, native passthrough, rate limit headers, cache logic
 - `internal/app/` -- ProxyService (failover), RouterService (cached routing), KeyManager
 - `internal/provider/` -- Registry + adapters (openai, anthropic, gemini, ollama)
+- `internal/ratelimit/` -- dual token bucket (RPM+TPM), Registry, QuotaTracker
+- `internal/cache/` -- Cache interface, otter W-TinyLFU memory implementation
+- `internal/tokencount/` -- token estimation for TPM rate limiting
+- `internal/worker/` -- Worker interface, Runner (errgroup), UsageRecorder, QuotaSyncWorker
 - `internal/storage/sqlite/` -- SQLite with read/write pools, WAL, goose migrations
 - `internal/config/` -- YAML config with `${ENV}` expansion, DB bootstrap
 - `internal/auth/` -- API key auth with otter cache
@@ -51,12 +55,13 @@ API keys require `gnd_` prefix. Set via `GANDALF_ADMIN_KEY` env var. Delete `gan
 |---------|---------|
 | `go-chi/chi/v5` | HTTP router |
 | `google/uuid` | UUID v7 |
-| `maypok86/otter/v2` | W-TinyLFU cache (auth + routing) |
+| `maypok86/otter/v2` | W-TinyLFU cache (auth, routing, response cache) |
 | `pressly/goose/v3` | SQL migrations |
 | `go.yaml.in/yaml/v3` | YAML config |
 | `modernc.org/sqlite` | Pure-Go SQLite |
 | `rs/dnscache` | Shared DNS cache |
 | `tidwall/gjson` | Zero-alloc JSON field extraction |
+| `golang.org/x/sync` | errgroup for worker management |
 
 ## Conventions
 

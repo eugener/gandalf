@@ -12,12 +12,27 @@ import (
 
 // Config is the top-level gateway configuration.
 type Config struct {
-	Server    ServerConfig    `yaml:"server"`
-	Database  DatabaseConfig  `yaml:"database"`
-	Auth      AuthConfig      `yaml:"auth"`
-	Providers []ProviderEntry `yaml:"providers"`
-	Routes    []RouteEntry    `yaml:"routes"`
-	Keys      []KeyEntry      `yaml:"keys"`
+	Server     ServerConfig     `yaml:"server"`
+	Database   DatabaseConfig   `yaml:"database"`
+	Auth       AuthConfig       `yaml:"auth"`
+	RateLimits RateLimitConfig  `yaml:"rate_limits"`
+	Cache      CacheConfig      `yaml:"cache"`
+	Providers  []ProviderEntry  `yaml:"providers"`
+	Routes     []RouteEntry     `yaml:"routes"`
+	Keys       []KeyEntry       `yaml:"keys"`
+}
+
+// RateLimitConfig holds default rate limiting settings.
+type RateLimitConfig struct {
+	DefaultRPM int64 `yaml:"default_rpm"` // default requests per minute (0 = unlimited)
+	DefaultTPM int64 `yaml:"default_tpm"` // default tokens per minute (0 = unlimited)
+}
+
+// CacheConfig holds response cache settings.
+type CacheConfig struct {
+	Enabled    bool          `yaml:"enabled"`
+	MaxSize    int           `yaml:"max_size"`
+	DefaultTTL time.Duration `yaml:"default_ttl"`
 }
 
 // ServerConfig holds HTTP server settings.
@@ -111,6 +126,15 @@ func Load(path string) (*Config, error) {
 		},
 		Database: DatabaseConfig{
 			DSN: "gandalf.db",
+		},
+		RateLimits: RateLimitConfig{
+			DefaultRPM: 60,
+			DefaultTPM: 100_000,
+		},
+		Cache: CacheConfig{
+			Enabled:    true,
+			MaxSize:    10_000,
+			DefaultTTL: 5 * time.Minute,
 		},
 	}
 
