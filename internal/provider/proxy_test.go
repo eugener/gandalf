@@ -7,7 +7,57 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/rs/dnscache"
 )
+
+func TestNewTransportNilResolver(t *testing.T) {
+	t.Parallel()
+
+	tr := NewTransport(nil, false)
+
+	if tr.MaxIdleConnsPerHost != 100 {
+		t.Errorf("MaxIdleConnsPerHost = %d, want 100", tr.MaxIdleConnsPerHost)
+	}
+	if tr.MaxConnsPerHost != 200 {
+		t.Errorf("MaxConnsPerHost = %d, want 200", tr.MaxConnsPerHost)
+	}
+	if tr.IdleConnTimeout != 90*time.Second {
+		t.Errorf("IdleConnTimeout = %v, want 90s", tr.IdleConnTimeout)
+	}
+	if tr.TLSHandshakeTimeout != 5*time.Second {
+		t.Errorf("TLSHandshakeTimeout = %v, want 5s", tr.TLSHandshakeTimeout)
+	}
+	if tr.DialContext != nil {
+		t.Error("DialContext should be nil when resolver is nil")
+	}
+}
+
+func TestNewTransportWithResolver(t *testing.T) {
+	t.Parallel()
+
+	resolver := &dnscache.Resolver{}
+	tr := NewTransport(resolver, false)
+
+	if tr.DialContext == nil {
+		t.Error("DialContext should be set when resolver is non-nil")
+	}
+}
+
+func TestNewTransportForceHTTP2(t *testing.T) {
+	t.Parallel()
+
+	trHTTP2 := NewTransport(nil, true)
+	if !trHTTP2.ForceAttemptHTTP2 {
+		t.Error("ForceAttemptHTTP2 should be true when forceHTTP2=true")
+	}
+
+	trHTTP1 := NewTransport(nil, false)
+	if trHTTP1.ForceAttemptHTTP2 {
+		t.Error("ForceAttemptHTTP2 should be false when forceHTTP2=false")
+	}
+}
 
 func TestForwardRequest(t *testing.T) {
 	t.Parallel()

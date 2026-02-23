@@ -232,6 +232,7 @@ Two modes coexist:
 - Bootstrap seeds providers/routes/keys from config on first run (idempotent)
 - `log/slog` for logging (stdlib)
 - Before committing, sync `CLAUDE.md` and `spec.md` to reflect current project state
+- After each coding session, review test coverage (`make coverage`) and add tests for any new or newly-uncovered code -- aim for the best reasonable coverage without testing trivial wiring
 
 ## Dependencies (go.mod)
 
