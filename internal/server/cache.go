@@ -39,10 +39,12 @@ func isCacheable(req *gateway.ChatRequest) bool {
 	return false
 }
 
-// cacheKey produces a deterministic SHA-256 hash for a ChatRequest.
-func cacheKey(req *gateway.ChatRequest) string {
+// cacheKey produces a deterministic SHA-256 hash for a ChatRequest,
+// scoped to the caller's API key to prevent cross-user response leakage.
+func cacheKey(keyID string, req *gateway.ChatRequest) string {
 	// Build a normalized map for stable JSON output.
 	m := map[string]any{
+		"key_id":   keyID,
 		"model":    req.Model,
 		"messages": normalizeMessages(req.Messages),
 	}

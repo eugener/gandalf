@@ -23,7 +23,7 @@ func Bootstrap(ctx context.Context, cfg *Config, store storage.Store) error {
 			ID:        p.Name,
 			Name:      p.Name,
 			BaseURL:   p.BaseURL,
-			APIKeyEnc: p.APIKey, // TODO: encrypt at rest
+			APIKeyEnc: "", // provider keys stay in memory only, never persisted
 			Models:    p.Models,
 			Priority:  p.Priority,
 			Weight:    max(1, p.Weight),

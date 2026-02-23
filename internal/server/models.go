@@ -10,8 +10,7 @@ import (
 func (s *server) handleListModels(w http.ResponseWriter, r *http.Request) {
 	models, err := s.deps.Proxy.ListModels(r.Context())
 	if err != nil {
-		status := errorStatus(err)
-		writeJSON(w, status, errorResponse(err.Error()))
+		writeUpstreamError(w, r.Context(), err)
 		return
 	}
 

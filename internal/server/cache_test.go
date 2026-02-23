@@ -15,8 +15,8 @@ func TestCacheKey_Determinism(t *testing.T) {
 		Temperature: &temp,
 	}
 
-	k1 := cacheKey(req)
-	k2 := cacheKey(req)
+	k1 := cacheKey("key1", req)
+	k2 := cacheKey("key1", req)
 	if k1 != k2 {
 		t.Error("same request should produce same cache key")
 	}
@@ -36,7 +36,7 @@ func TestCacheKey_DifferentInputs(t *testing.T) {
 		Temperature: &temp,
 	}
 
-	if cacheKey(r1) == cacheKey(r2) {
+	if cacheKey("key1", r1) == cacheKey("key1", r2) {
 		t.Error("different messages should produce different keys")
 	}
 }
@@ -64,7 +64,7 @@ func TestCacheKey_WithAllFields(t *testing.T) {
 		ResponseFormat:   []byte(`{"type":"json"}`),
 	}
 
-	k := cacheKey(req)
+	k := cacheKey("key1", req)
 	if k == "" {
 		t.Error("cache key should not be empty")
 	}
@@ -86,8 +86,21 @@ func TestCacheKey_ModelDifference(t *testing.T) {
 		Messages:    []gateway.Message{{Role: "user", Content: []byte(`"hello"`)}},
 		Temperature: &temp,
 	}
-	if cacheKey(r1) == cacheKey(r2) {
+	if cacheKey("key1", r1) == cacheKey("key1", r2) {
 		t.Error("different models should produce different keys")
+	}
+}
+
+func TestCacheKey_DifferentKeys(t *testing.T) {
+	t.Parallel()
+	temp := 0.0
+	req := &gateway.ChatRequest{
+		Model:       "gpt-4o",
+		Messages:    []gateway.Message{{Role: "user", Content: []byte(`"hello"`)}},
+		Temperature: &temp,
+	}
+	if cacheKey("key-a", req) == cacheKey("key-b", req) {
+		t.Error("different API keys should produce different cache keys")
 	}
 }
 

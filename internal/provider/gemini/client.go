@@ -59,12 +59,13 @@ func (c *Client) ChatCompletion(ctx context.Context, req *gateway.ChatRequest) (
 		return nil, fmt.Errorf("gemini: marshal request: %w", err)
 	}
 
-	url := fmt.Sprintf("%s/models/%s:generateContent?key=%s", c.baseURL, req.Model, c.apiKey)
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	u := fmt.Sprintf("%s/models/%s:generateContent", c.baseURL, req.Model)
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, u, bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("gemini: create request: %w", err)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("x-goog-api-key", c.apiKey)
 
 	resp, err := c.http.Do(httpReq)
 	if err != nil {
@@ -93,12 +94,13 @@ func (c *Client) ChatCompletionStream(ctx context.Context, req *gateway.ChatRequ
 		return nil, fmt.Errorf("gemini: marshal request: %w", err)
 	}
 
-	url := fmt.Sprintf("%s/models/%s:streamGenerateContent?alt=sse&key=%s", c.baseURL, req.Model, c.apiKey)
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	u := fmt.Sprintf("%s/models/%s:streamGenerateContent?alt=sse", c.baseURL, req.Model)
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, u, bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("gemini: create request: %w", err)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("x-goog-api-key", c.apiKey)
 
 	resp, err := c.http.Do(httpReq)
 	if err != nil {
@@ -141,12 +143,13 @@ func (c *Client) Embeddings(ctx context.Context, req *gateway.EmbeddingRequest) 
 		return nil, fmt.Errorf("gemini: marshal request: %w", err)
 	}
 
-	url := fmt.Sprintf("%s/models/%s:embedContent?key=%s", c.baseURL, req.Model, c.apiKey)
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	u := fmt.Sprintf("%s/models/%s:embedContent", c.baseURL, req.Model)
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, u, bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("gemini: create request: %w", err)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("x-goog-api-key", c.apiKey)
 
 	resp, err := c.http.Do(httpReq)
 	if err != nil {
@@ -182,11 +185,12 @@ func (c *Client) Embeddings(ctx context.Context, req *gateway.EmbeddingRequest) 
 
 // ListModels returns the available Gemini model IDs.
 func (c *Client) ListModels(ctx context.Context) ([]string, error) {
-	url := fmt.Sprintf("%s/models?key=%s", c.baseURL, c.apiKey)
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	u := fmt.Sprintf("%s/models", c.baseURL)
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
 		return nil, fmt.Errorf("gemini: create request: %w", err)
 	}
+	httpReq.Header.Set("x-goog-api-key", c.apiKey)
 
 	resp, err := c.http.Do(httpReq)
 	if err != nil {

@@ -126,7 +126,7 @@ func (s *server) handleNativeProxy(providerType string,
 		// Route model -> provider targets.
 		targets, err := s.deps.Router.ResolveModel(r.Context(), model)
 		if err != nil {
-			writeJSON(w, http.StatusBadGateway, errorResponse("routing failed: "+err.Error()))
+			writeUpstreamError(w, r.Context(), err)
 			return
 		}
 

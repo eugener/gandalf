@@ -175,10 +175,12 @@ func run(configPath string) error {
 	})
 
 	srv := &http.Server{
-		Addr:         cfg.Server.Addr,
-		Handler:      handler,
-		ReadTimeout:  cfg.Server.ReadTimeout,
-		WriteTimeout: cfg.Server.WriteTimeout,
+		Addr:              cfg.Server.Addr,
+		Handler:           handler,
+		ReadTimeout:       cfg.Server.ReadTimeout,
+		ReadHeaderTimeout: 5 * time.Second,
+		WriteTimeout:      cfg.Server.WriteTimeout,
+		IdleTimeout:       120 * time.Second,
 	}
 
 	// Start background workers.

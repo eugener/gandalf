@@ -204,7 +204,7 @@ type ProviderConfig struct {
 	ID        string   `json:"id"`
 	Name      string   `json:"name"`
 	BaseURL   string   `json:"base_url"`
-	APIKeyEnc string   `json:"-"`           // encrypted, never exposed
+	APIKeyEnc string   `json:"-"`           // deprecated: no longer persisted, kept for schema compat
 	Models    []string `json:"models"`
 	Priority  int      `json:"priority"`
 	Weight    int      `json:"weight"`

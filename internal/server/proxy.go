@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"log/slog"
@@ -13,7 +14,11 @@ import (
 	"github.com/eugener/gandalf/internal/ratelimit"
 )
 
+// maxRequestBody is the maximum allowed request body size (4 MB).
+const maxRequestBody = 4 << 20
+
 func (s *server) handleChatCompletion(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxRequestBody)
 	var req gateway.ChatRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, errorResponse("invalid request body: "+err.Error()))
@@ -33,7 +38,7 @@ func (s *server) handleChatCompletion(w http.ResponseWriter, r *http.Request) {
 
 	// Cache check (non-streaming only).
 	if !req.Stream && s.deps.Cache != nil && isCacheable(&req) {
-		key := cacheKey(&req)
+		key := cacheKey(identity.KeyID, &req)
 		if data, ok := s.deps.Cache.Get(r.Context(), key); ok {
 			s.recordUsage(r, req.Model, nil, 0, true)
 			w.Header()["Content-Type"] = jsonCT
@@ -52,8 +57,7 @@ func (s *server) handleChatCompletion(w http.ResponseWriter, r *http.Request) {
 	resp, err := s.deps.Proxy.ChatCompletion(r.Context(), &req)
 	elapsed := time.Since(start)
 	if err != nil {
-		status := errorStatus(err)
-		writeJSON(w, status, errorResponse(err.Error()))
+		writeUpstreamError(w, r.Context(), err)
 		return
 	}
 
@@ -62,7 +66,7 @@ func (s *server) handleChatCompletion(w http.ResponseWriter, r *http.Request) {
 	// Cache store.
 	if s.deps.Cache != nil && isCacheable(&req) {
 		if data, err := json.Marshal(resp); err == nil {
-			s.deps.Cache.Set(r.Context(), cacheKey(&req), data, s.cacheTTL(&req))
+			s.deps.Cache.Set(r.Context(), cacheKey(identity.KeyID, &req), data, s.cacheTTL(&req))
 		}
 	}
 
@@ -75,8 +79,7 @@ func (s *server) handleChatCompletionStream(w http.ResponseWriter, r *http.Reque
 	start := time.Now()
 	ch, err := s.deps.Proxy.ChatCompletionStream(r.Context(), req)
 	if err != nil {
-		status := errorStatus(err)
-		writeJSON(w, status, errorResponse(err.Error()))
+		writeUpstreamError(w, r.Context(), err)
 		return
 	}
 
@@ -236,6 +239,19 @@ func errorResponse(msg string) apiError {
 	e.Error.Message = msg
 	e.Error.Type = "invalid_request_error"
 	return e
+}
+
+// writeUpstreamError logs the full error server-side and returns a sanitized
+// message to the client. For server errors (5xx), a generic message is returned
+// to avoid leaking upstream provider internals (URLs, org IDs, etc.).
+func writeUpstreamError(w http.ResponseWriter, ctx context.Context, err error) {
+	status := errorStatus(err)
+	if status >= http.StatusInternalServerError {
+		slog.LogAttrs(ctx, slog.LevelError, "upstream error", slog.String("error", err.Error()))
+		writeJSON(w, status, errorResponse("upstream provider error"))
+		return
+	}
+	writeJSON(w, status, errorResponse(err.Error()))
 }
 
 func errorStatus(err error) int {

@@ -14,12 +14,14 @@
 With `GOEXPERIMENT=jsonv2` (set in Makefile):
 
 ```
-ChatCompletion:       ~53 allocs/op  ~4.9us
-ChatCompletionStream: ~52 allocs/op  ~4.7us
+ChatCompletion:       ~54 allocs/op  ~4.9us
+ChatCompletionStream: ~53 allocs/op  ~4.7us
 Healthz:              ~25 allocs/op  ~2.2us
 ```
 
-Without jsonv2: ChatCompletion ~54, Stream ~60.
++1 alloc vs pre-security-hardening baseline from `http.MaxBytesReader` body size limit (OOM protection).
+
+Without jsonv2: ChatCompletion ~55, Stream ~60.
 
 Remaining ~18 allocs from `encoding/json` (request decode + response encode). Only reducible via `easyjson` codegen or waiting for json/v2 to graduate from experiment.
 

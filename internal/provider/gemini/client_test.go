@@ -84,8 +84,8 @@ func TestChatCompletion(t *testing.T) {
 		if !strings.Contains(r.URL.Path, ":generateContent") {
 			t.Errorf("path = %s, want :generateContent", r.URL.Path)
 		}
-		if r.URL.Query().Get("key") != "test-key" {
-			t.Error("missing API key in query params")
+		if r.Header.Get("x-goog-api-key") != "test-key" {
+			t.Error("missing API key in x-goog-api-key header")
 		}
 
 		w.Header().Set("Content-Type", "application/json")

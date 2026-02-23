@@ -10,6 +10,7 @@ import (
 
 // handleEmbeddings decodes an embedding request and forwards it to the proxy.
 func (s *server) handleEmbeddings(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxRequestBody)
 	var req gateway.EmbeddingRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, errorResponse("invalid request body: "+err.Error()))
@@ -27,8 +28,7 @@ func (s *server) handleEmbeddings(w http.ResponseWriter, r *http.Request) {
 	resp, err := s.deps.Proxy.Embeddings(r.Context(), &req)
 	elapsed := time.Since(start)
 	if err != nil {
-		status := errorStatus(err)
-		writeJSON(w, status, errorResponse(err.Error()))
+		writeUpstreamError(w, r.Context(), err)
 		return
 	}
 
