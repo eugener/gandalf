@@ -56,91 +56,91 @@ These are non-negotiable design constraints:
 gandalf/
   cmd/gandalf/
     main.go                        # Entrypoint: parse flags, call run()
-    run.go                         # Wire deps, start server + workers, graceful shutdown
+    run.go                         # Wire deps, DNS cache, startup config logging, start server, graceful shutdown
   internal/
-    gateway.go                     # Domain types, Authenticator interface, RBAC bitmask,
-                                   #   context helpers. No project imports.
-    errors.go                      # Domain error types + sentinel errors
+    gateway.go                     # Domain types + Provider/NativeProxy/Authenticator interfaces + bundled requestMeta context. No project imports.
+    errors.go                      # Sentinel errors (ErrUnauthorized, ErrNotFound, ErrRateLimited, ErrProviderError, etc.)
     auth/
-      apikey.go                    # API key auth: hash -> cache lookup -> DB fallback
+      apikey.go                    # API key auth: hash -> otter cache -> DB fallback, subtle.ConstantTimeCompare
       jwt.go                       # (Phase 5) JWT/OIDC auth: JWKS cache, token validation
       auth.go                      # (Phase 5) Dual-mode dispatcher: JWT first, API key fallback
-      auth_test.go
     server/
-      server.go                    # NewServer(deps) http.Handler -- Mat Ryer pattern
-      routes.go                    # Single file: all route registrations
-      proxy.go                     # handleChatCompletion, handleEmbeddings handlers
-      models.go                    # handleListModels handler
-      admin.go                     # handleAdmin* CRUD handlers
+      server.go                    # New(Deps) http.Handler, route registration (chi)
+      proxy.go                     # handleChatCompletion (non-stream + stream branch) + helpers
+      native.go                    # Native API passthrough: handleNativeProxy, normalizeAuth, route mounting
+      sse.go                       # SSE write helpers: writeSSEHeaders, writeSSEData, writeSSEDone, writeSSEKeepAlive
+      embeddings.go                # handleEmbeddings handler
+      models.go                    # handleListModels handler (aggregates from all providers)
+      middleware.go                # recovery, requestID, logging, authenticate (statusWriter supports Flush)
       health.go                    # handleHealthz, handleReadyz
-      middleware.go                # Rate limit, cache, logging, metrics, tracing,
-                                   #   request ID, recovery -- middleware factories
-      server_test.go               # Handler + middleware tests via httptest.NewRecorder
+      admin.go                     # (Phase 4) handleAdmin* CRUD handlers
+      server_test.go               # Handler tests with inline fakes
+      server_bench_test.go         # Benchmarks: ChatCompletion, Stream, Healthz
+      native_test.go               # Native passthrough E2E tests: Anthropic, Gemini, Azure, Ollama
+      sse_test.go                  # SSE write helper unit tests
+      stream_test.go               # E2E streaming tests: OpenAI, Anthropic, Gemini, failover, disconnect
     app/
-      proxy.go                     # ProxyService: route -> cache check -> provider call -> record
-      proxy_test.go
-      keymanager.go                # API key CRUD + validation
-      keymanager_test.go
-      orgmanager.go                # Organization/Team CRUD, limit inheritance
-      orgmanager_test.go
-      router.go                    # Model-alias -> provider target resolution
-      router_test.go
-      usage.go                     # UsageService: quota checks, query, aggregation
-      usage_test.go
+      proxy.go                     # ProxyService: priority failover routing for chat/stream/embeddings/models
+      router.go                    # RouterService: model alias -> []ResolvedTarget (otter-cached, 10s TTL)
+      keymanager.go                # KeyManager: create/delete API keys
+      proxy_test.go                # Failover tests: primary ok, failover, client error, all fail
+      router_test.go               # Multi-target, no route default, empty targets
+      orgmanager.go                # (Phase 5) Organization/Team CRUD, limit inheritance
+      usage.go                     # (Phase 3) UsageService: quota checks, query, aggregation
     provider/
-      provider.go                  # Provider interface + StreamChunk, ChatRequest/Response types
-      registry.go                  # ProviderRegistry: name -> Provider, explicit registration
+      provider.go                  # Registry: thread-safe name->Provider map
+      proxy.go                     # ForwardRequest: shared native HTTP passthrough helper
+      proxy_test.go                # ForwardRequest tests: headers, SSE flush, upstream errors
+      sseutil/
+        reader.go                  # Shared SSE line reader: NewScanner, ParseSSELine
+        reader_test.go             # SSE parsing tests
       openai/
-        client.go                  # OpenAI adapter (reference implementation)
-        client_test.go
+        client.go                  # OpenAI adapter: ChatCompletion, Stream, Embeddings, ListModels, ProxyRequest + dnscache
+        client_test.go             # Stream, cancel, HTTP error, embeddings tests
       anthropic/
-        client.go                  # Anthropic adapter (message format translation)
-        client_test.go
+        client.go                  # Anthropic adapter: ChatCompletion, Stream, ListModels, ProxyRequest + dnscache
+        translate.go               # OpenAI <-> Anthropic request/response translation
+        stream.go                  # SSE event state machine (message_start, content_block_delta, etc.)
+        client_test.go             # Translation, streaming state machine tests
       gemini/
-        client.go                  # Gemini adapter
-        client_test.go
+        client.go                  # Gemini adapter: ChatCompletion, Stream, Embeddings, ListModels, ProxyRequest + dnscache
+        translate.go               # OpenAI <-> Gemini request/response translation
+        stream.go                  # EOF-terminated SSE reader
+        client_test.go             # Translation, EOF streaming tests
+      ollama/
+        client.go                  # Ollama adapter: ChatCompletion, Stream, Embeddings, ListModels, ProxyRequest + dnscache
+        client_test.go             # Completion, stream, list models, proxy request tests
     storage/
-      storage.go                   # Store interfaces: APIKeyStore, ProviderStore, RouteStore,
-                                   #   UsageStore, OrgStore, TeamStore
+      storage.go                   # Store interfaces (APIKeyStore, ProviderStore, RouteStore, UsageStore, OrgStore)
       sqlite/
-        db.go                      # New(dsn) -- open DB, run migrations, return Store
-        migrations/                # Embedded SQL migration files (goose)
-          001_init.sql
-        apikey.go                  # APIKeyStore implementation
-        provider.go                # ProviderStore implementation
-        route.go                   # RouteStore implementation
-        usage.go                   # UsageStore implementation
-        org.go                     # OrgStore + TeamStore implementation
-        sqlite_test.go             # Integration tests against :memory: SQLite
-    cache/
+        db.go, apikey.go, provider.go, route.go, org.go, usage.go
+        sqlite_test.go
+        migrations/001_init.sql
+    cache/                         # (Phase 3)
       cache.go                     # Cache interface (Get/Set/Delete/Purge)
       memory.go                    # In-memory W-TinyLFU cache (otter)
-      memory_test.go
-    worker/
+    worker/                        # (Phase 3)
       worker.go                    # Worker interface: Run(ctx) error
       runner.go                    # errgroup-based runner, starts all workers
       usage_recorder.go            # Buffered channel -> batch DB insert
       ratelimit_sync.go            # In-memory rate limit state -> DB sync
     config/
       config.go                    # Config struct, Load(path), env var expansion
-      bootstrap.go                 # Seed DB from YAML on first run
+      bootstrap.go                 # Seed DB from YAML on first run (idempotent)
       config_test.go
-    telemetry/
+    telemetry/                     # (Phase 4)
       telemetry.go                 # Setup(cfg) (shutdown func, error) -- single init point
       metrics.go                   # Prometheus metric definitions, pre-cached label children
       tracing.go                   # OTel tracer provider + OTLP exporter setup
-      logging.go                   # zerolog setup, diode writer
-    testutil/                      # Shared test helpers (NOT production code)
-      fake_provider.go             # FakeProvider implements provider.Provider
-      fake_store.go                # In-memory store fakes for unit tests
-      server_helper.go             # newTestServer(t, opts...) helper
-      roundtrip.go                 # Custom http.RoundTripper for HTTP mocking
-  configs/gandalf.yaml             # Example bootstrap config
-  testdata/
-    cassettes/                     # go-vcr recorded HTTP responses for provider tests
-  deploy/
-    Dockerfile                     # Multi-stage, CGO_ENABLED=0
-    docker-compose.yml             # Dev stack (gandalf + prometheus + jaeger)
+    testutil/
+      fake_provider.go             # FakeProvider with configurable callbacks + FakeStreamChan
+      fake_store.go                # In-memory FakeStore implementing storage.Store
+      fake_auth.go                 # FakeAuth (always succeeds) + RejectAuth
+  configs/gandalf.yaml             # Example config: OpenAI + Anthropic + Gemini + Ollama
+  docs/
+    architecture.md                # Detailed architecture reference
+    performance.md                 # Performance optimizations, benchmarks, testing
+    spec.md                        # This file
   Makefile
 ```
 
@@ -148,7 +148,7 @@ gandalf/
 
 **Domain types at `internal/gateway.go`** (Ben Johnson pattern) -- interfaces and types live at the root of `internal/`, imported by everything, importing nothing from the project. Eliminates the `domain/` + `port/` split that creates artificial package boundaries.
 
-**`auth/` = authentication and authorization** -- dual-mode dispatcher (JWT first, API key fallback). JWKS cache for JWT validation, otter cache for API key lookups. RBAC via permission bitmask (no DB lookup per request). Separated from `server/` because auth logic is reusable beyond HTTP (e.g., gRPC in the future).
+**`auth/` = authentication and authorization** -- currently API key auth only (otter cache, subtle.ConstantTimeCompare). Phase 5 adds JWT/OIDC dual-mode dispatcher. RBAC via permission bitmask (no DB lookup per request). Separated from `server/` because auth logic is reusable beyond HTTP (e.g., gRPC in the future).
 
 **`server/` = HTTP transport layer** (Mat Ryer pattern) -- `NewServer(deps) http.Handler` takes all dependencies via constructor, returns a testable handler. Single `routes.go` file maps the entire API surface. Handler makers return closures: initialization runs once, not per-request. Middleware factories live here since they're HTTP-specific.
 
@@ -734,7 +734,7 @@ Stdlib: `net/http`, `database/sql`, `crypto/sha256`, `crypto/subtle`, `sync`, `c
 Project skeleton, config, SQLite + migrations, OpenAI adapter, `/v1/chat/completions` (non-streaming), API key auth (single org), health endpoint, build pipeline.
 
 **Phase 2 -- Streaming + Multi-Provider + Native Passthrough (DONE):**
-SSE streaming (channel-based, 8-buffer), Anthropic adapter (Messages API, SSE event state machine), Gemini adapter (generateContent, EOF-terminated SSE), Ollama adapter (OpenAI-compat + native API), priority failover routing (sorted targets, otter-cached), `/v1/embeddings`, `/v1/models`. Native API passthrough: `NativeProxy` interface, `ForwardRequest` shared helper, `normalizeAuth` middleware. Native routes: `/v1/messages` (Anthropic), `/v1beta/models/*` (Gemini), `/openai/deployments/*` (Azure OpenAI), `/api/*` (Ollama). Shared `dnscache.Resolver`, `gjson` for response translation + model extraction. `testutil/` package with reusable fakes. Performance: route target caching (-12 allocs), bundled request context (-2 allocs), `GOEXPERIMENT=jsonv2` (-1-8 allocs). Baseline: ~53 allocs/op ChatCompletion, ~25 allocs/op Healthz.
+SSE streaming (channel-based, 8-buffer), Anthropic adapter (Messages API, SSE event state machine), Gemini adapter (generateContent, EOF-terminated SSE), Ollama adapter (OpenAI-compat + native API), priority failover routing (sorted targets, otter-cached), `/v1/embeddings`, `/v1/models`. Native API passthrough: `NativeProxy` interface, `ForwardRequest` shared helper, `normalizeAuth` middleware. Native routes: `/v1/messages` (Anthropic), `/v1beta/models/*` (Gemini), `/openai/deployments/*` (Azure OpenAI), `/api/*` (Ollama). Shared `dnscache.Resolver`, `gjson` for response translation + model extraction. `testutil/` package with reusable fakes. Performance: route target caching (-12 allocs), bundled request context (-2 allocs), `GOEXPERIMENT=jsonv2` (-1-8 allocs). Baseline: ~53 allocs/op ChatCompletion, ~25 allocs/op Healthz. Startup config logging (database, providers with native proxy status, routes with targets, API key validation, server timeouts, universal API endpoints). Routes for all provider models (OpenAI, Anthropic, Gemini). Docs extracted into `docs/` (architecture, performance, spec).
 
 **Phase 3 -- Rate Limiting + Caching:**
 Token-bucket rate limiter (dual RPM+TPM), exact-match cache, token counting, async usage recording, quota enforcement.
