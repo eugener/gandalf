@@ -31,7 +31,7 @@ Hexagonal architecture. Domain types at `internal/gateway.go`, interfaces at con
 - `internal/storage/` -- Store interfaces in `storage.go`. SQLite impl with separate read/write pools, WAL mode, goose migrations.
 - `internal/config/` -- YAML config with `${ENV}` expansion, DB bootstrap (seed providers, routes, keys)
 - `internal/testutil/` -- reusable test fakes (FakeProvider, FakeStore, FakeAuth, RejectAuth)
-- `cmd/gandalf/` -- Entrypoint: parse flags, wire deps, shared DNS cache, graceful shutdown
+- `cmd/gandalf/` -- Entrypoint: parse flags, wire deps, shared DNS cache, startup config logging, graceful shutdown
 
 ## Directory Structure
 
@@ -39,7 +39,7 @@ Hexagonal architecture. Domain types at `internal/gateway.go`, interfaces at con
 gandalf/
   cmd/gandalf/
     main.go                        # Entrypoint: parse flags, call run()
-    run.go                         # Wire deps, DNS cache, start server, graceful shutdown
+    run.go                         # Wire deps, DNS cache, startup config logging, start server, graceful shutdown
   internal/
     gateway.go                     # Domain types + Provider/NativeProxy/Authenticator interfaces + bundled requestMeta context
     errors.go                      # Sentinel errors
@@ -183,6 +183,21 @@ type Store interface {
 ### System
 
 - `GET /healthz`, `GET /readyz` -- no auth
+
+## Startup Logging
+
+On startup, `run.go` logs configuration for debuggability:
+
+- `starting gandalf` -- version (from git tag) and listen address
+- `database opened` -- DSN path
+- `api key configured` -- key name + `valid_prefix` (whether key has `gnd_` prefix); never logs key material
+- `provider registered` -- provider name + `native_proxy` support; or `provider skipped (disabled)`
+- `route configured` -- model alias + target list (e.g. `openai/gpt-4o`)
+- `server timeouts` -- read/write/shutdown durations
+- `universal API enabled` -- list of universal endpoints
+- `gandalf ready` -- final ready signal
+
+API keys require the `gnd_` prefix. Set via `GANDALF_ADMIN_KEY` env var (expanded in YAML config via `${ENV}`). Delete `gandalf.db` to re-bootstrap after changing keys.
 
 ## Streaming Design
 
