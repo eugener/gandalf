@@ -12,6 +12,7 @@ import (
 
 	"github.com/rs/dnscache"
 
+	gateway "github.com/eugener/gandalf/internal"
 	"github.com/eugener/gandalf/internal/app"
 	"github.com/eugener/gandalf/internal/auth"
 	"github.com/eugener/gandalf/internal/config"
@@ -40,6 +41,8 @@ func run(configPath string) error {
 	}
 	defer store.Close()
 
+	slog.Info("database opened", "dsn", cfg.Database.DSN)
+
 	// Bootstrap from config
 	ctx := context.Background()
 	if err := config.Bootstrap(ctx, cfg, store); err != nil {
@@ -60,21 +63,40 @@ func run(configPath string) error {
 	reg := provider.NewRegistry()
 	for _, p := range cfg.Providers {
 		if !p.IsEnabled() {
+			slog.Info("provider skipped (disabled)", "name", p.Name)
 			continue
 		}
+		var prov gateway.Provider
 		switch p.Name {
 		case "openai":
-			reg.Register(p.Name, openai.New(p.APIKey, p.BaseURL, dnsResolver))
+			prov = openai.New(p.APIKey, p.BaseURL, dnsResolver)
 		case "anthropic":
-			reg.Register(p.Name, anthropic.New(p.APIKey, p.BaseURL, dnsResolver))
+			prov = anthropic.New(p.APIKey, p.BaseURL, dnsResolver)
 		case "gemini":
-			reg.Register(p.Name, gemini.New(p.APIKey, p.BaseURL, dnsResolver))
+			prov = gemini.New(p.APIKey, p.BaseURL, dnsResolver)
 		case "ollama":
-			reg.Register(p.Name, ollama.New(p.APIKey, p.BaseURL, dnsResolver))
+			prov = ollama.New(p.APIKey, p.BaseURL, dnsResolver)
 		default:
 			slog.Warn("unknown provider, skipping", "name", p.Name)
+			continue
 		}
+		_, hasNative := prov.(gateway.NativeProxy)
+		reg.Register(p.Name, prov)
+		slog.Info("provider registered", "name", p.Name, "native_proxy", hasNative)
 	}
+
+	for _, r := range cfg.Routes {
+		targets := make([]string, len(r.Targets))
+		for i, t := range r.Targets {
+			targets[i] = t.Provider + "/" + t.Model
+		}
+		slog.Info("route configured", "alias", r.ModelAlias, "targets", targets)
+	}
+	slog.Info("server timeouts",
+		"read", cfg.Server.ReadTimeout,
+		"write", cfg.Server.WriteTimeout,
+		"shutdown", cfg.Server.ShutdownTimeout,
+	)
 
 	// Wire services
 	apiKeyAuth, err := auth.NewAPIKeyAuth(store)
@@ -113,6 +135,13 @@ func run(configPath string) error {
 		close(errCh)
 	}()
 
+	slog.Info("universal API enabled",
+		"endpoints", []string{
+			"POST /v1/chat/completions",
+			"POST /v1/embeddings",
+			"GET  /v1/models",
+		},
+	)
 	slog.Info("gandalf ready", "addr", cfg.Server.Addr)
 
 	// Wait for signal

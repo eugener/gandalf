@@ -68,6 +68,41 @@ routes:
         priority: 1
     strategy: priority
 
+  - model_alias: gpt-4.1
+    targets:
+      - provider: openai
+        model: gpt-4.1
+        priority: 1
+    strategy: priority
+
+  - model_alias: claude-sonnet-4-6
+    targets:
+      - provider: anthropic
+        model: claude-sonnet-4-6
+        priority: 1
+    strategy: priority
+
+  - model_alias: claude-haiku-4-5
+    targets:
+      - provider: anthropic
+        model: claude-haiku-4-5
+        priority: 1
+    strategy: priority
+
+  - model_alias: gemini-2.0-flash
+    targets:
+      - provider: gemini
+        model: gemini-2.0-flash
+        priority: 1
+    strategy: priority
+
+  - model_alias: gemini-2.0-pro
+    targets:
+      - provider: gemini
+        model: gemini-2.0-pro
+        priority: 1
+    strategy: priority
+
 keys:
   - name: default-admin
     key: "${GANDALF_ADMIN_KEY}"
