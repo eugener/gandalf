@@ -106,8 +106,8 @@ func (s *server) handleNativeProxy(providerType string,
 	modelFunc func(*http.Request, []byte) string) http.HandlerFunc {
 
 	return func(w http.ResponseWriter, r *http.Request) {
-		// Read body for model extraction.
-		body, err := io.ReadAll(r.Body)
+		// Read body for model extraction (capped at 4 MB).
+		body, err := io.ReadAll(io.LimitReader(r.Body, 4<<20))
 		if err != nil {
 			writeJSON(w, http.StatusBadRequest, errorResponse("failed to read request body"))
 			return

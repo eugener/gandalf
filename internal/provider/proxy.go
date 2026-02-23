@@ -1,15 +1,48 @@
 // Package provider implements the provider registry for LLM provider adapters.
 //
-// This file provides ForwardRequest, a shared helper for native HTTP passthrough.
+// This file provides shared helpers: NewTransport for HTTP client setup and
+// ForwardRequest for native HTTP passthrough.
 package provider
 
 import (
 	"context"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"strings"
+	"time"
+
+	"github.com/rs/dnscache"
 )
+
+// NewTransport returns a tuned *http.Transport with connection pooling and
+// optional DNS caching. Set forceHTTP2 to true for remote HTTPS APIs, false
+// for local HTTP/1.1 servers (e.g. Ollama).
+func NewTransport(resolver *dnscache.Resolver, forceHTTP2 bool) *http.Transport {
+	t := &http.Transport{
+		MaxIdleConnsPerHost: 100,
+		MaxConnsPerHost:     200,
+		IdleConnTimeout:     90 * time.Second,
+		ForceAttemptHTTP2:   forceHTTP2,
+		TLSHandshakeTimeout: 5 * time.Second,
+	}
+	if resolver != nil {
+		t.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+			host, port, err := net.SplitHostPort(addr)
+			if err != nil {
+				return nil, err
+			}
+			ips, err := resolver.LookupHost(ctx, host)
+			if err != nil {
+				return nil, err
+			}
+			var d net.Dialer
+			return d.DialContext(ctx, network, net.JoinHostPort(ips[0], port))
+		}
+	}
+	return t
+}
 
 // hopByHop headers that must not be forwarded between client and upstream.
 var hopByHopHeaders = map[string]struct{}{

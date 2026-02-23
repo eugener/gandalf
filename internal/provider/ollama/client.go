@@ -8,10 +8,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"strings"
-	"time"
 
 	"github.com/rs/dnscache"
 	"github.com/tidwall/gjson"
@@ -24,6 +22,11 @@ import (
 const (
 	defaultBaseURL = "http://localhost:11434"
 	providerName   = "ollama"
+)
+
+var (
+	_ gateway.Provider    = (*Client)(nil)
+	_ gateway.NativeProxy = (*Client)(nil)
 )
 
 // Client is an Ollama provider adapter that implements gateway.Provider
@@ -42,34 +45,10 @@ func New(apiKey, baseURL string, resolver *dnscache.Resolver) *Client {
 	if baseURL == "" {
 		baseURL = defaultBaseURL
 	}
-	baseURL = strings.TrimRight(baseURL, "/")
-
-	t := &http.Transport{
-		MaxIdleConnsPerHost: 100,
-		MaxConnsPerHost:     200,
-		IdleConnTimeout:     90 * time.Second,
-		ForceAttemptHTTP2:   false, // Ollama is typically HTTP/1.1
-		TLSHandshakeTimeout: 5 * time.Second,
-	}
-	if resolver != nil {
-		t.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
-			host, port, err := net.SplitHostPort(addr)
-			if err != nil {
-				return nil, err
-			}
-			ips, err := resolver.LookupHost(ctx, host)
-			if err != nil {
-				return nil, err
-			}
-			var d net.Dialer
-			return d.DialContext(ctx, network, net.JoinHostPort(ips[0], port))
-		}
-	}
-
 	return &Client{
 		apiKey:  apiKey,
-		baseURL: baseURL,
-		http:    &http.Client{Transport: t},
+		baseURL: strings.TrimRight(baseURL, "/"),
+		http:    &http.Client{Transport: provider.NewTransport(resolver, false)}, // HTTP/1.1 for local Ollama
 	}
 }
 
@@ -214,6 +193,7 @@ func (c *Client) ListModels(ctx context.Context) ([]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("ollama: create request: %w", err)
 	}
+	c.setHeaders(httpReq)
 
 	resp, err := c.http.Do(httpReq)
 	if err != nil {

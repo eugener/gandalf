@@ -7,10 +7,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"strings"
-	"time"
 
 	"github.com/rs/dnscache"
 	"github.com/tidwall/gjson"
@@ -23,6 +21,11 @@ import (
 const (
 	defaultBaseURL = "https://api.openai.com/v1"
 	providerName   = "openai"
+)
+
+var (
+	_ gateway.Provider    = (*Client)(nil)
+	_ gateway.NativeProxy = (*Client)(nil)
 )
 
 // Client is an OpenAI provider adapter that implements gateway.Provider.
@@ -39,34 +42,10 @@ func New(apiKey, baseURL string, resolver *dnscache.Resolver) *Client {
 	if baseURL == "" {
 		baseURL = defaultBaseURL
 	}
-	baseURL = strings.TrimRight(baseURL, "/")
-
-	t := &http.Transport{
-		MaxIdleConnsPerHost: 100,
-		MaxConnsPerHost:     200,
-		IdleConnTimeout:     90 * time.Second,
-		ForceAttemptHTTP2:   true,
-		TLSHandshakeTimeout: 5 * time.Second,
-	}
-	if resolver != nil {
-		t.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
-			host, port, err := net.SplitHostPort(addr)
-			if err != nil {
-				return nil, err
-			}
-			ips, err := resolver.LookupHost(ctx, host)
-			if err != nil {
-				return nil, err
-			}
-			var d net.Dialer
-			return d.DialContext(ctx, network, net.JoinHostPort(ips[0], port))
-		}
-	}
-
 	return &Client{
 		apiKey:  apiKey,
-		baseURL: baseURL,
-		http:    &http.Client{Transport: t},
+		baseURL: strings.TrimRight(baseURL, "/"),
+		http:    &http.Client{Transport: provider.NewTransport(resolver, true)},
 	}
 }
 
