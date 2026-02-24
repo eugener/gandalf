@@ -161,6 +161,132 @@ func TestChatCompletionStreamEOFTerminated(t *testing.T) {
 	}
 }
 
+func TestEmbeddings(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.Contains(r.URL.Path, ":embedContent") {
+			t.Errorf("path = %s, want :embedContent", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"embedding":{"values":[0.1,0.2,0.3]}}`)
+	}))
+	defer srv.Close()
+
+	client := New("gemini", "test-key", srv.URL+"/v1beta", nil)
+	resp, err := client.Embeddings(context.Background(), &gateway.EmbeddingRequest{
+		Model: "text-embedding-004",
+		Input: json.RawMessage(`"hello world"`),
+	})
+	if err != nil {
+		t.Fatalf("Embeddings: %v", err)
+	}
+	if resp.Object != "list" {
+		t.Errorf("object = %q, want list", resp.Object)
+	}
+	if resp.Model != "text-embedding-004" {
+		t.Errorf("model = %q", resp.Model)
+	}
+}
+
+func TestEmbeddingsArrayInput(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"embedding":{"values":[0.4,0.5]}}`)
+	}))
+	defer srv.Close()
+
+	client := New("gemini", "test-key", srv.URL+"/v1beta", nil)
+	resp, err := client.Embeddings(context.Background(), &gateway.EmbeddingRequest{
+		Model: "text-embedding-004",
+		Input: json.RawMessage(`["hello","world"]`),
+	})
+	if err != nil {
+		t.Fatalf("Embeddings: %v", err)
+	}
+	if resp.Object != "list" {
+		t.Errorf("object = %q, want list", resp.Object)
+	}
+}
+
+func TestEmbeddingsHTTPError(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		fmt.Fprint(w, `{"error":{"message":"bad request"}}`)
+	}))
+	defer srv.Close()
+
+	client := New("gemini", "test-key", srv.URL+"/v1beta", nil)
+	_, err := client.Embeddings(context.Background(), &gateway.EmbeddingRequest{
+		Model: "text-embedding-004",
+		Input: json.RawMessage(`"hello"`),
+	})
+	if err == nil {
+		t.Fatal("expected error for HTTP 400")
+	}
+}
+
+func TestListModels(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1beta/models" {
+			t.Errorf("path = %s, want /v1beta/models", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"models":[{"name":"models/gemini-2.0-flash"},{"name":"models/gemini-1.5-pro"}]}`)
+	}))
+	defer srv.Close()
+
+	client := New("gemini", "test-key", srv.URL+"/v1beta", nil)
+	models, err := client.ListModels(context.Background())
+	if err != nil {
+		t.Fatalf("ListModels: %v", err)
+	}
+	if len(models) != 2 {
+		t.Fatalf("got %d models, want 2", len(models))
+	}
+	// Verify "models/" prefix is stripped.
+	if models[0] != "gemini-2.0-flash" {
+		t.Errorf("models[0] = %q, want gemini-2.0-flash", models[0])
+	}
+}
+
+func TestListModelsHTTPError(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+		fmt.Fprint(w, `{"error":{"message":"forbidden"}}`)
+	}))
+	defer srv.Close()
+
+	client := New("gemini", "bad-key", srv.URL+"/v1beta", nil)
+	_, err := client.ListModels(context.Background())
+	if err == nil {
+		t.Fatal("expected error for HTTP 403")
+	}
+}
+
+func TestHealthCheck(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"models":[{"name":"models/gemini-2.0-flash"}]}`)
+	}))
+	defer srv.Close()
+
+	client := New("gemini", "test-key", srv.URL+"/v1beta", nil)
+	if err := client.HealthCheck(context.Background()); err != nil {
+		t.Fatalf("HealthCheck: %v", err)
+	}
+}
+
 func TestMapStopReason(t *testing.T) {
 	t.Parallel()
 

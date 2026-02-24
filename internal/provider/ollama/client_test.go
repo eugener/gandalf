@@ -119,6 +119,56 @@ func TestListModels(t *testing.T) {
 	}
 }
 
+func TestEmbeddings(t *testing.T) {
+	t.Parallel()
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/embeddings" {
+			t.Errorf("path = %q, want /v1/embeddings", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, `{"object":"list","data":[{"object":"embedding","index":0,"embedding":[0.1,0.2]}],"model":"nomic-embed-text","usage":{"prompt_tokens":3,"total_tokens":3}}`)
+	}))
+	defer ts.Close()
+
+	c := New("ollama", "", ts.URL, nil)
+	resp, err := c.Embeddings(context.Background(), &gateway.EmbeddingRequest{
+		Model: "nomic-embed-text",
+		Input: json.RawMessage(`"hello"`),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Model != "nomic-embed-text" {
+		t.Errorf("model = %q, want nomic-embed-text", resp.Model)
+	}
+	if resp.Usage == nil || resp.Usage.PromptTokens != 3 {
+		t.Error("expected usage with prompt_tokens=3")
+	}
+}
+
+func TestEmbeddingsHTTPError(t *testing.T) {
+	t.Parallel()
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		io.WriteString(w, `{"error":"unsupported model"}`)
+	}))
+	defer ts.Close()
+
+	c := New("ollama", "", ts.URL, nil)
+	_, err := c.Embeddings(context.Background(), &gateway.EmbeddingRequest{
+		Model: "bad-model",
+		Input: json.RawMessage(`"hello"`),
+	})
+	if err == nil {
+		t.Fatal("expected error for HTTP 400")
+	}
+	if !strings.Contains(err.Error(), "400") {
+		t.Errorf("error = %q, want HTTP 400", err)
+	}
+}
+
 func TestHTTPError(t *testing.T) {
 	t.Parallel()
 
