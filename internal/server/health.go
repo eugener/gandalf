@@ -7,8 +7,9 @@ import "net/http"
 // plainCT avoids the []string{v} alloc from Header.Set (see proxy.go:jsonCT).
 // Together they save 3 allocs/req per health endpoint.
 var (
-	okBody  = []byte("ok")
-	plainCT = []string{"text/plain"}
+	okBody       = []byte("ok")
+	notReadyBody = []byte("not ready")
+	plainCT      = []string{"text/plain"}
 )
 
 func (s *server) handleHealthz(w http.ResponseWriter, _ *http.Request) {
@@ -22,7 +23,7 @@ func (s *server) handleReadyz(w http.ResponseWriter, r *http.Request) {
 		if err := s.deps.ReadyCheck(r.Context()); err != nil {
 			w.Header()["Content-Type"] = plainCT
 			w.WriteHeader(http.StatusServiceUnavailable)
-			w.Write([]byte("not ready"))
+			w.Write(notReadyBody)
 			return
 		}
 	}

@@ -8,8 +8,6 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/google/uuid"
-
 	gateway "github.com/eugener/gandalf/internal"
 	"github.com/eugener/gandalf/internal/ratelimit"
 )
@@ -43,7 +41,7 @@ func (s *server) handleChatCompletion(w http.ResponseWriter, r *http.Request) {
 			if s.deps.Metrics != nil {
 				s.deps.Metrics.CacheHits.Inc()
 			}
-			s.recordUsage(r, req.Model, nil, 0, true)
+			s.recordUsage(r, identity, req.Model, nil, 0, true)
 			w.Header()["Content-Type"] = jsonCT
 			w.WriteHeader(http.StatusOK)
 			w.Write(data)
@@ -76,7 +74,7 @@ func (s *server) handleChatCompletion(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	s.recordUsage(r, req.Model, resp.Usage, elapsed, false)
+	s.recordUsage(r, identity, req.Model, resp.Usage, elapsed, false)
 	writeJSON(w, http.StatusOK, resp)
 }
 
@@ -144,7 +142,7 @@ func (s *server) handleChatCompletionStream(w http.ResponseWriter, r *http.Reque
 // finishStream adjusts TPM and records usage after stream completion.
 func (s *server) finishStream(r *http.Request, req *gateway.ChatRequest, identity *gateway.Identity, estimated int64, usage *gateway.Usage, start time.Time) {
 	s.adjustTPM(identity, estimated, usage)
-	s.recordUsage(r, req.Model, usage, time.Since(start), false)
+	s.recordUsage(r, identity, req.Model, usage, time.Since(start), false)
 }
 
 // getLimiter returns the rate limiter for the identity, or nil if not configured.
@@ -186,13 +184,13 @@ func (s *server) adjustTPM(identity *gateway.Identity, estimated int64, usage *g
 }
 
 // recordUsage sends a usage record to the async recorder.
-func (s *server) recordUsage(r *http.Request, model string, usage *gateway.Usage, elapsed time.Duration, cached bool) {
+// Identity is passed directly to avoid a redundant context lookup.
+// The record ID is assigned by the UsageRecorder worker during flush.
+func (s *server) recordUsage(r *http.Request, identity *gateway.Identity, model string, usage *gateway.Usage, elapsed time.Duration, cached bool) {
 	if s.deps.Usage == nil {
 		return
 	}
-	identity := gateway.IdentityFromContext(r.Context())
 	rec := gateway.UsageRecord{
-		ID:         uuid.Must(uuid.NewV7()).String(),
 		Model:      model,
 		LatencyMs:  int(elapsed.Milliseconds()),
 		StatusCode: http.StatusOK,
@@ -286,9 +284,12 @@ func errorStatus(err error) int {
 var jsonCT = []string{"application/json"}
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
+	data, err := json.Marshal(v)
+	if err != nil {
+		slog.Error("failed to encode response", "error", err)
+		return
+	}
 	w.Header()["Content-Type"] = jsonCT
 	w.WriteHeader(status)
-	if err := json.NewEncoder(w).Encode(v); err != nil {
-		slog.Error("failed to encode response", "error", err)
-	}
+	w.Write(data)
 }

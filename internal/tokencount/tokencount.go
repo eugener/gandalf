@@ -23,12 +23,12 @@ func (c *Counter) EstimateRequest(model string, messages []gateway.Message) int 
 	for _, m := range messages {
 		total += overhead
 		total += estimateTokens(m.Role)
-		total += estimateTokens(string(m.Content))
+		total += estimateTokensBytes(m.Content)
 		if m.Name != "" {
 			total += estimateTokens(m.Name) + 1 // name costs 1 extra token
 		}
 		if len(m.ToolCalls) > 0 {
-			total += estimateTokens(string(m.ToolCalls))
+			total += estimateTokensBytes(m.ToolCalls)
 		}
 		if m.ToolCallID != "" {
 			total += estimateTokens(m.ToolCallID)
@@ -51,6 +51,15 @@ func estimateTokens(s string) int {
 	}
 	// ~4 bytes per token for English; ceil division.
 	return (len(s) + 3) / 4
+}
+
+// estimateTokensBytes is like estimateTokens but accepts []byte,
+// avoiding the heap allocation from string([]byte) conversion.
+func estimateTokensBytes(b []byte) int {
+	if len(b) == 0 {
+		return 0
+	}
+	return (len(b) + 3) / 4
 }
 
 // messageOverhead returns per-message token overhead.

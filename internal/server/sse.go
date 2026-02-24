@@ -13,16 +13,22 @@ var (
 	sseKeepAlive  = []byte(": keep-alive\n\n")
 )
 
-// sseHeaders is a pre-allocated header value slice for SSE responses.
-var sseHeaders = []string{"text/event-stream"}
+// Pre-allocated header value slices for SSE responses.
+// Direct map assignment avoids the []string{v} alloc that Header.Set creates.
+var (
+	sseHeaders      = []string{"text/event-stream"}
+	sseCacheControl = []string{"no-cache"}
+	sseConnection   = []string{"keep-alive"}
+	sseAccelBuf     = []string{"no"}
+)
 
 // writeSSEHeaders sets the response headers for an SSE stream.
 func writeSSEHeaders(w http.ResponseWriter) {
 	h := w.Header()
 	h["Content-Type"] = sseHeaders
-	h["Cache-Control"] = []string{"no-cache"}
-	h["Connection"] = []string{"keep-alive"}
-	h["X-Accel-Buffering"] = []string{"no"}
+	h["Cache-Control"] = sseCacheControl
+	h["Connection"] = sseConnection
+	h["X-Accel-Buffering"] = sseAccelBuf
 	w.WriteHeader(http.StatusOK)
 }
 

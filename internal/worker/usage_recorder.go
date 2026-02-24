@@ -5,6 +5,8 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/google/uuid"
+
 	gateway "github.com/eugener/gandalf/internal"
 )
 
@@ -100,6 +102,13 @@ func (u *UsageRecorder) flush(ctx context.Context, buf []gateway.UsageRecord) {
 	// Copy to avoid aliasing the caller's slice.
 	batch := make([]gateway.UsageRecord, len(buf))
 	copy(batch, buf)
+
+	// Assign IDs off the hot path; callers leave ID empty.
+	for i := range batch {
+		if batch[i].ID == "" {
+			batch[i].ID = uuid.Must(uuid.NewV7()).String()
+		}
+	}
 
 	if err := u.store.InsertUsage(ctx, batch); err != nil {
 		slog.LogAttrs(ctx, slog.LevelError, "usage flush failed",

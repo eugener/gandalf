@@ -102,13 +102,13 @@ func newLimiter(limits Limits) *Limiter {
 func (l *Limiter) AllowRPM() Result {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	l.lastUsed = time.Now()
+	now := time.Now()
+	l.lastUsed = now
 
 	if l.rpm == nil {
 		return Result{Allowed: true}
 	}
 
-	now := time.Now()
 	remaining, ok := l.rpm.tryConsume(1, now)
 	if ok {
 		return Result{
@@ -129,13 +129,13 @@ func (l *Limiter) AllowRPM() Result {
 func (l *Limiter) ConsumeTPM(estimated int64) Result {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	l.lastUsed = time.Now()
+	now := time.Now()
+	l.lastUsed = now
 
 	if l.tpm == nil {
 		return Result{Allowed: true}
 	}
 
-	now := time.Now()
 	remaining, ok := l.tpm.tryConsume(float64(estimated), now)
 	if ok {
 		return Result{

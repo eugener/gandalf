@@ -10,6 +10,16 @@ import (
 	"github.com/eugener/gandalf/internal/telemetry"
 )
 
+// statusText maps HTTP status codes to pre-allocated strings,
+// avoiding a strconv.Itoa allocation per request.
+var statusText [600]string
+
+func init() {
+	for i := range statusText {
+		statusText[i] = strconv.Itoa(i)
+	}
+}
+
 // metricsMiddleware records request duration, status, and active count.
 func metricsMiddleware(m *telemetry.Metrics) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
@@ -32,7 +42,7 @@ func metricsMiddleware(m *telemetry.Metrics) func(http.Handler) http.Handler {
 			m.ActiveRequests.Dec()
 
 			pattern := routePattern(r)
-			statusStr := strconv.Itoa(status)
+			statusStr := statusText[status]
 
 			m.RequestsTotal.WithLabelValues(r.Method, pattern, statusStr).Inc()
 			m.RequestDuration.WithLabelValues(r.Method, pattern).Observe(elapsed)
