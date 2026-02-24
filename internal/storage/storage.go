@@ -10,8 +10,10 @@ import (
 // APIKeyStore manages API key persistence.
 type APIKeyStore interface {
 	CreateKey(ctx context.Context, key *gateway.APIKey) error
+	GetKey(ctx context.Context, id string) (*gateway.APIKey, error)
 	GetKeyByHash(ctx context.Context, hash string) (*gateway.APIKey, error)
 	ListKeys(ctx context.Context, orgID string, offset, limit int) ([]*gateway.APIKey, error)
+	CountKeys(ctx context.Context, orgID string) (int, error)
 	UpdateKey(ctx context.Context, key *gateway.APIKey) error
 	DeleteKey(ctx context.Context, id string) error
 	TouchKeyUsed(ctx context.Context, id string) error
@@ -22,6 +24,7 @@ type ProviderStore interface {
 	CreateProvider(ctx context.Context, p *gateway.ProviderConfig) error
 	GetProvider(ctx context.Context, id string) (*gateway.ProviderConfig, error)
 	ListProviders(ctx context.Context) ([]*gateway.ProviderConfig, error)
+	CountProviders(ctx context.Context) (int, error)
 	UpdateProvider(ctx context.Context, p *gateway.ProviderConfig) error
 	DeleteProvider(ctx context.Context, id string) error
 }
@@ -29,8 +32,10 @@ type ProviderStore interface {
 // RouteStore manages route persistence.
 type RouteStore interface {
 	CreateRoute(ctx context.Context, r *gateway.Route) error
+	GetRoute(ctx context.Context, id string) (*gateway.Route, error)
 	GetRouteByAlias(ctx context.Context, alias string) (*gateway.Route, error)
 	ListRoutes(ctx context.Context) ([]*gateway.Route, error)
+	CountRoutes(ctx context.Context) (int, error)
 	UpdateRoute(ctx context.Context, r *gateway.Route) error
 	DeleteRoute(ctx context.Context, id string) error
 }
@@ -39,6 +44,10 @@ type RouteStore interface {
 type UsageStore interface {
 	InsertUsage(ctx context.Context, records []gateway.UsageRecord) error
 	SumUsageCost(ctx context.Context, keyID string) (float64, error)
+	QueryUsage(ctx context.Context, filter gateway.UsageFilter) ([]gateway.UsageRecord, error)
+	CountUsage(ctx context.Context, filter gateway.UsageFilter) (int, error)
+	UpsertRollup(ctx context.Context, rollups []gateway.UsageRollup) error
+	QueryRollups(ctx context.Context, filter gateway.RollupFilter) ([]gateway.UsageRollup, error)
 }
 
 // OrgStore manages organization and team persistence.

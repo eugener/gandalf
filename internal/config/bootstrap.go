@@ -88,6 +88,7 @@ func Bootstrap(ctx context.Context, cfg *Config, store storage.Store) error {
 			KeyHash:   hash,
 			KeyPrefix: prefix,
 			OrgID:     k.OrgID,
+			Role:      role,
 			CreatedAt: time.Now().UTC(),
 		}
 		if err := store.CreateKey(ctx, key); err != nil {

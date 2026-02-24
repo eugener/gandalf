@@ -16,6 +16,29 @@ func (s *Store) CreateRoute(ctx context.Context, r *gateway.Route) error {
 	return err
 }
 
+// GetRoute retrieves a route by its ID.
+func (s *Store) GetRoute(ctx context.Context, id string) (*gateway.Route, error) {
+	row := s.read.QueryRowContext(ctx,
+		`SELECT id, model_alias, targets, strategy, cache_ttl_s
+		 FROM routes WHERE id=?`, id,
+	)
+	return scanRoute(row)
+}
+
+// CountRoutes returns the total number of routes.
+func (s *Store) CountRoutes(ctx context.Context) (int, error) {
+	var n int
+	err := s.read.QueryRowContext(ctx, `SELECT COUNT(*) FROM routes`).Scan(&n)
+	return n, err
+}
+
+// CountProviders returns the total number of providers.
+func (s *Store) CountProviders(ctx context.Context) (int, error) {
+	var n int
+	err := s.read.QueryRowContext(ctx, `SELECT COUNT(*) FROM providers`).Scan(&n)
+	return n, err
+}
+
 // GetRouteByAlias retrieves a route by model alias.
 func (s *Store) GetRouteByAlias(ctx context.Context, alias string) (*gateway.Route, error) {
 	row := s.read.QueryRowContext(ctx,

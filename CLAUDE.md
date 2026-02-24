@@ -18,20 +18,21 @@ All make targets set `GOEXPERIMENT=jsonv2` for lower alloc counts in JSON-heavy 
 
 ## Architecture
 
-Hexagonal architecture. Domain types at `internal/gateway.go`, interfaces at consumer level. Multi-provider support (OpenAI, Anthropic, Gemini, Ollama), priority failover routing, SSE streaming, native API passthrough. Per-key rate limiting, response caching, async usage recording, quota enforcement.
+Hexagonal architecture. Domain types at `internal/gateway.go`, interfaces at consumer level. Multi-provider support (OpenAI, Anthropic, Gemini, Ollama), priority failover routing, SSE streaming, native API passthrough. Per-key rate limiting, response caching, async usage recording, quota enforcement. Admin CRUD API with RBAC, usage aggregation, Prometheus metrics, OpenTelemetry tracing.
 
 Key packages:
 - `internal/gateway.go` -- domain types + interfaces (no project imports)
-- `internal/server/` -- HTTP handlers + middleware (chi), SSE streaming, native passthrough, rate limit headers, cache logic
-- `internal/app/` -- ProxyService (failover), RouterService (cached routing), KeyManager
+- `internal/server/` -- HTTP handlers + middleware (chi), SSE streaming, native passthrough, admin CRUD, metrics/tracing middleware
+- `internal/app/` -- ProxyService (failover with tracing spans), RouterService (cached routing), KeyManager
 - `internal/provider/` -- Registry + adapters (openai, anthropic, gemini, ollama)
 - `internal/ratelimit/` -- dual token bucket (RPM+TPM), Registry, QuotaTracker
 - `internal/cache/` -- Cache interface, otter W-TinyLFU memory implementation
 - `internal/tokencount/` -- token estimation for TPM rate limiting
-- `internal/worker/` -- Worker interface, Runner (errgroup), UsageRecorder, QuotaSyncWorker
+- `internal/telemetry/` -- Prometheus metrics (Metrics struct), OpenTelemetry tracing (OTLP gRPC)
+- `internal/worker/` -- Worker interface, Runner (errgroup), UsageRecorder, QuotaSyncWorker, UsageRollupWorker
 - `internal/storage/sqlite/` -- SQLite with read/write pools, WAL, goose migrations
-- `internal/config/` -- YAML config with `${ENV}` expansion, DB bootstrap
-- `internal/auth/` -- API key auth with otter cache
+- `internal/config/` -- YAML config with `${ENV}` expansion, DB bootstrap, telemetry config
+- `internal/auth/` -- API key auth with otter cache, per-key roles
 - `internal/testutil/` -- reusable test fakes
 - `cmd/gandalf/` -- entrypoint, wiring, startup logging, graceful shutdown
 
@@ -43,11 +44,13 @@ See [docs/architecture.md](docs/architecture.md) for full directory listing, dep
 
 **Native passthrough (raw forwarding):** Anthropic `/v1/messages`, Gemini `/v1beta/models/*`, Azure `/openai/deployments/*`, Ollama `/api/*`
 
-**System (no auth):** `GET /healthz`, `GET /readyz`
+**Admin API (auth + RBAC):** `/admin/v1/providers`, `/admin/v1/keys`, `/admin/v1/routes`, `/admin/v1/cache/purge`, `/admin/v1/usage`, `/admin/v1/usage/summary`
+
+**System (no auth):** `GET /healthz`, `GET /readyz`, `GET /metrics`
 
 ## Auth
 
-API keys require `gnd_` prefix. Set via `GANDALF_ADMIN_KEY` env var. Delete `gandalf.db` to re-bootstrap after changing keys.
+API keys require `gnd_` prefix. Set via `GANDALF_ADMIN_KEY` env var. Delete `gandalf.db` to re-bootstrap after changing keys. Per-key roles (admin/member/viewer/service_account) control access to admin endpoints via RBAC bitmask.
 
 ## Dependencies
 
@@ -62,6 +65,8 @@ API keys require `gnd_` prefix. Set via `GANDALF_ADMIN_KEY` env var. Delete `gan
 | `rs/dnscache` | Shared DNS cache |
 | `tidwall/gjson` | Zero-alloc JSON field extraction |
 | `golang.org/x/sync` | errgroup for worker management |
+| `prometheus/client_golang` | Prometheus metrics (native histograms) |
+| `go.opentelemetry.io/otel` | Distributed tracing (OTLP gRPC) |
 
 ## Conventions
 

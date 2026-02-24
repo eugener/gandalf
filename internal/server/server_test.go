@@ -85,6 +85,9 @@ func newTestHandler() http.Handler {
 type fakeRouteStore struct{}
 
 func (fakeRouteStore) CreateRoute(context.Context, *gateway.Route) error { return nil }
+func (fakeRouteStore) GetRoute(context.Context, string) (*gateway.Route, error) {
+	return nil, gateway.ErrNotFound
+}
 func (fakeRouteStore) GetRouteByAlias(_ context.Context, alias string) (*gateway.Route, error) {
 	return &gateway.Route{
 		ID:         "r-1",
@@ -94,6 +97,7 @@ func (fakeRouteStore) GetRouteByAlias(_ context.Context, alias string) (*gateway
 	}, nil
 }
 func (fakeRouteStore) ListRoutes(context.Context) ([]*gateway.Route, error) { return nil, nil }
+func (fakeRouteStore) CountRoutes(context.Context) (int, error)             { return 0, nil }
 func (fakeRouteStore) UpdateRoute(context.Context, *gateway.Route) error    { return nil }
 func (fakeRouteStore) DeleteRoute(context.Context, string) error            { return nil }
 

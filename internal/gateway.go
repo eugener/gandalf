@@ -144,6 +144,7 @@ type APIKey struct {
 	UserID        string     `json:"user_id,omitempty"`
 	TeamID        string     `json:"team_id,omitempty"`
 	OrgID         string     `json:"org_id"`
+	Role          string     `json:"role"`                     // "admin", "member", "viewer", "service_account"
 	AllowedModels []string   `json:"allowed_models,omitempty"` // nil = inherit from team
 	RPMLimit      *int64     `json:"rpm_limit,omitempty"`
 	TPMLimit      *int64     `json:"tpm_limit,omitempty"`
@@ -250,6 +251,42 @@ type UsageRecord struct {
 	StatusCode       int       `json:"status_code"`
 	RequestID        string    `json:"request_id"`
 	CreatedAt        time.Time `json:"created_at"`
+}
+
+// UsageRollup represents a pre-aggregated usage summary for a time bucket.
+type UsageRollup struct {
+	OrgID            string  `json:"org_id"`
+	KeyID            string  `json:"key_id"`
+	Model            string  `json:"model"`
+	Period           string  `json:"period"` // "hourly", "daily"
+	Bucket           string  `json:"bucket"` // ISO 8601 timestamp of bucket start
+	RequestCount     int     `json:"request_count"`
+	PromptTokens     int     `json:"prompt_tokens"`
+	CompletionTokens int     `json:"completion_tokens"`
+	TotalTokens      int     `json:"total_tokens"`
+	CostUSD          float64 `json:"cost_usd"`
+	CachedCount      int     `json:"cached_count"`
+}
+
+// UsageFilter selects usage records for querying.
+type UsageFilter struct {
+	OrgID  string
+	KeyID  string
+	Model  string
+	Since  string // RFC3339
+	Until  string // RFC3339
+	Offset int
+	Limit  int
+}
+
+// RollupFilter selects rollups for querying.
+type RollupFilter struct {
+	OrgID  string
+	KeyID  string
+	Model  string
+	Period string
+	Since  string
+	Until  string
 }
 
 // --- Context keys ---

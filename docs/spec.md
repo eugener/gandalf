@@ -137,6 +137,12 @@ gandalf/
       config.go                    # Config struct, Load(path), env var expansion
       bootstrap.go                 # Seed DB from YAML on first run (idempotent)
       config_test.go
+    cloudauth/                     # (Phase 4.5) Auth transports for cloud-hosted providers
+      cloudauth.go                 # APIKeyTransport (extracted), transport factory
+      gcp.go                       # GCPOAuthTransport: ADC/SA auto-refreshing token
+      azure.go                     # AzureEntraTransport: DefaultAzureCredential
+      aws.go                       # AWSSigV4Transport: request signing
+      cloudauth_test.go
     telemetry/                     # (Phase 4)
       telemetry.go                 # Setup(cfg) (shutdown func, error) -- single init point
       metrics.go                   # Prometheus metric definitions, pre-cached label children
@@ -181,6 +187,7 @@ cmd/gandalf         -- wires concrete types, imports everything
   -> app/           -- business logic, depends on domain interfaces
   -> internal/      -- domain types + interfaces (no project imports)
   <- provider/*     -- implements gateway.Provider
+  <- cloudauth/     -- auth transports for cloud-hosted providers (injected into provider HTTP clients)
   <- storage/*      -- implements gateway.*Store
   <- cache/         -- implements gateway.Cache
   <- worker/        -- implements background tasks
@@ -749,13 +756,149 @@ SSE streaming (channel-based, 8-buffer), Anthropic adapter (Messages API, SSE ev
 Worker framework (`worker/` package: `Worker` interface, `Runner` with errgroup, `UsageRecorder` with buffered channel batch flush). Dual token-bucket rate limiter (`ratelimit/` package: lazy refill, RPM in middleware, TPM in handlers, `AdjustTPM` post-response correction, `Registry` with map+RWMutex). Rate limit headers (`X-Ratelimit-Limit-Requests`, `X-Ratelimit-Remaining-Requests`, `X-Ratelimit-Limit-Tokens`, `X-Ratelimit-Remaining-Tokens`, `Retry-After`). Token counting (`tokencount/` package: character-based heuristic ~4 chars/token). Response cache (`cache/` package: otter W-TinyLFU, per-entry TTL, SHA-256 cache keys from normalized requests, cacheable when temp <= 0.3 or seed set). Quota enforcement (`QuotaTracker`: in-memory spend tracking, `QuotaSyncWorker` periodic DB reload). Identity extended with `KeyID`, `RPMLimit`, `TPMLimit`, `MaxBudget`. Config: `rate_limits` and `cache` sections with defaults. Usage recording on all endpoints (chat, stream, embeddings). Rate limiting on all route groups (universal + native). Performance: AllowRPM ~76ns/0-alloc, baseline 53 allocs/op unchanged.
 
 **Phase 4 -- Admin API + Observability:**
-Admin CRUD endpoints (providers, keys, routes), Prometheus metrics with native histograms, OpenTelemetry tracing, usage aggregation.
+Admin CRUD endpoints (providers, keys, routes), Prometheus metrics with native histograms, OpenTelemetry tracing, usage aggregation. During this phase: separate `name` (instance ID) from `type` (wire format) in `ProviderEntry` config and provider registry to enable multi-instance support (prerequisite for Phase 4.5).
+
+**Phase 4.5 -- Cloud Hosting Support:**
+Run existing provider types (OpenAI, Anthropic, Gemini) on Azure, AWS Bedrock, and GCP Vertex AI via configurable auth transports and hosting modes. See "Cloud Hosting" section below for full design.
 
 **Phase 5 -- Enterprise Auth + Multi-Tenancy:**
 JWT/OIDC dual-mode auth (`lestrrat-go/jwx/v2`), multi-tenant org/team hierarchy with limit inheritance, RBAC with permission bitmask, admin endpoints for orgs/teams, auth configuration endpoint.
 
 **Phase 6 -- Advanced:**
 Peak EWMA + P2C load balancing, circuit breaker with weighted failure classification, singleflight request coalescing, SSO/SAML via Dex, mTLS, OPA policy engine, semantic caching, Redis cache backend, Postgres store option.
+
+## Cloud Hosting (Phase 4.5)
+
+### Overview
+
+Any supported model type can be hosted on major cloud platforms. The adapter (`type`) determines the wire format; the hosting environment determines auth and URL patterns.
+
+| Model provider | Direct | Azure | AWS Bedrock | GCP Vertex |
+|----------------|--------|-------|-------------|------------|
+| OpenAI (GPT-4o, o1) | Yes | Yes | -- | -- |
+| Anthropic (Claude) | Yes | -- | Yes | Yes |
+| Gemini | Yes | -- | -- | Yes |
+
+### Config Schema
+
+`ProviderEntry` gains `type` (wire format) and `auth` (credential strategy). `name` becomes a user-chosen instance ID.
+
+```yaml
+providers:
+  # Direct providers (unchanged, auth.type defaults to api_key)
+  - name: openai
+    type: openai
+    base_url: https://api.openai.com/v1
+    auth: { type: api_key, api_key: "${OPENAI_API_KEY}" }
+
+  # Azure OpenAI -- OpenAI wire format, Azure endpoint
+  - name: azure-gpt4o
+    type: openai
+    hosting: azure
+    base_url: https://myresource.openai.azure.com/openai/v1
+    auth: { type: api_key, api_key: "${AZURE_OPENAI_KEY}" }
+    # Entra ID alternative:
+    # auth: { type: azure_entra }  # uses DefaultAzureCredential
+
+  # GCP Vertex AI -- Anthropic wire format, Google auth
+  - name: vertex-claude
+    type: anthropic
+    hosting: vertex
+    region: us-central1
+    project: my-gcp-project
+    auth: { type: gcp_oauth }  # uses Application Default Credentials
+
+  # GCP Vertex AI -- Gemini wire format, Google auth
+  - name: vertex-gemini
+    type: gemini
+    hosting: vertex
+    region: us-central1
+    project: my-gcp-project
+    auth: { type: gcp_oauth }
+
+  # AWS Bedrock -- Anthropic wire format, AWS auth
+  - name: bedrock-claude
+    type: anthropic
+    hosting: bedrock
+    region: us-east-1
+    auth: { type: aws_sigv4 }  # uses default credential chain
+```
+
+### Cloud Compatibility Matrix
+
+| Dimension | Azure OpenAI | AWS Bedrock | GCP Vertex |
+|-----------|-------------|-------------|------------|
+| Wire format | OpenAI (identical) | Anthropic Messages (body tweaks) | Gemini / Anthropic (body tweaks) |
+| Auth | API key or Entra token | SigV4 or Bedrock API key | OAuth2 (ADC / service account) |
+| URL pattern | Same as OpenAI v1 | `/model/{id}/invoke` | `.../publishers/{pub}/models/{m}:generateContent` |
+| Body diffs | `model` = deployment name | No `model` in body (in URL) | Anthropic: `anthropic_version` in body |
+| Streaming | Standard SSE | AWS event stream (binary) | Standard SSE |
+| Go auth dep | `azidentity` | `aws-sdk-go-v2` | `x/oauth2/google` |
+
+### Auth Transport Architecture
+
+Auth is implemented as `http.RoundTripper` decorators. Adapters receive a pre-configured `http.Client` and are unaware of the cloud.
+
+```go
+// internal/cloudauth/cloudauth.go
+type AuthTransport interface {
+    http.RoundTripper
+}
+
+// API key (existing behavior, extracted)
+type APIKeyTransport struct {
+    Key       string
+    HeaderKey string  // "Authorization", "x-api-key", "x-goog-api-key"
+    Prefix    string  // "Bearer ", "", ""
+    Base      http.RoundTripper
+}
+
+// Azure Entra ID -- auto-refreshing OAuth2 token
+// Dep: github.com/Azure/azure-sdk-for-go/sdk/azidentity
+type AzureEntraTransport struct { ... }
+
+// AWS SigV4 -- signs each request
+// Dep: github.com/aws/aws-sdk-go-v2/aws/signer/v4
+type AWSSigV4Transport struct { ... }
+
+// GCP OAuth2 -- auto-refreshing ADC/SA token
+// Dep: golang.org/x/oauth2/google
+type GCPOAuthTransport struct { ... }
+```
+
+### Hosting Modes
+
+Each adapter accepts a `HostingStyle` that adjusts URL construction and body format:
+
+- **`direct`** (default): Current behavior, no changes.
+- **`azure`**: OpenAI adapter only. v1 API is wire-compatible; `model` field maps to deployment name. No adapter changes needed beyond auth transport.
+- **`vertex`**: Gemini and Anthropic adapters. URL rewriting (`projects/{p}/locations/{l}/publishers/{pub}/models/{m}:generateContent`). Anthropic adapter adds `anthropic_version` to request body and omits `model` field.
+- **`bedrock`**: Anthropic adapter. URL rewriting (`/model/{id}/invoke`). Omits `model` from body. Streaming uses AWS SDK `InvokeModelWithResponseStream` (binary event stream, not SSE) -- requires `bedrockruntime` SDK for decoding.
+
+### Implementation Sequence
+
+**Phase 4.5a -- Azure + Vertex (low effort, standard HTTP):**
+1. Multi-instance registry (name/type split from Phase 4)
+2. `cloudauth` package with `APIKeyTransport` and `GCPOAuthTransport`
+3. Hosting mode support in Anthropic and Gemini adapters (URL rewriting, body tweaks for Vertex)
+4. Azure: just base_url + api_key, works immediately with existing OpenAI adapter
+5. `AzureEntraTransport` for Entra ID auth (optional, API key works for most users)
+
+**Phase 4.5b -- Bedrock (heavier, AWS SDK dependency):**
+1. `AWSSigV4Transport` for request signing
+2. Bedrock hosting mode in Anthropic adapter (URL rewriting, body tweaks)
+3. Bedrock streaming via `bedrockruntime.InvokeModelWithResponseStream` (AWS event stream decoding)
+4. Integration tests with recorded responses (go-vcr or equivalent)
+
+### Dependencies (Phase 4.5)
+
+| Package | Purpose | Phase |
+|---------|---------|-------|
+| `golang.org/x/oauth2/google` | GCP Application Default Credentials, auto-refreshing token source | 4.5a |
+| `github.com/Azure/azure-sdk-for-go/sdk/azidentity` | Azure DefaultAzureCredential (Entra ID) | 4.5a (optional) |
+| `github.com/aws/aws-sdk-go-v2/config` | AWS default credential chain | 4.5b |
+| `github.com/aws/aws-sdk-go-v2/aws/signer/v4` | SigV4 request signing | 4.5b |
+| `github.com/aws/aws-sdk-go-v2/service/bedrockruntime` | Bedrock InvokeModel + event stream decoding | 4.5b |
 
 ## Verification
 

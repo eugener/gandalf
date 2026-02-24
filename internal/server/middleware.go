@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 
 	gateway "github.com/eugener/gandalf/internal"
 	"github.com/eugener/gandalf/internal/ratelimit"
@@ -183,6 +185,9 @@ func (s *server) rateLimit(next http.Handler) http.Handler {
 		setRPMHeaders(w, result)
 
 		if !result.Allowed {
+			if s.deps.Metrics != nil {
+				s.deps.Metrics.RateLimitRejects.WithLabelValues("rpm").Inc()
+			}
 			writeRateLimitError(w, result)
 			return
 		}
@@ -209,6 +214,51 @@ func setTPMHeaders(w http.ResponseWriter, r ratelimit.Result) {
 	h := w.Header()
 	h[hdrRateLimitTokens] = []string{strconv.FormatInt(r.Limit, 10)}
 	h[hdrRemainingTokens] = []string{strconv.FormatInt(r.Remaining, 10)}
+}
+
+// tracingMiddleware creates a span for each HTTP request.
+func tracingMiddleware(tracer trace.Tracer) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			ctx, span := tracer.Start(r.Context(), r.Method+" "+r.URL.Path,
+				trace.WithAttributes(
+					attribute.String("http.method", r.Method),
+					attribute.String("http.url", r.URL.Path),
+					attribute.String("http.request_id", gateway.RequestIDFromContext(r.Context())),
+				),
+			)
+			defer span.End()
+
+			sw := statusWriterPool.Get().(*statusWriter)
+			sw.ResponseWriter = w
+			sw.status = http.StatusOK
+			sw.wroteHeader = false
+
+			next.ServeHTTP(sw, r.WithContext(ctx))
+
+			span.SetAttributes(attribute.Int("http.status_code", sw.status))
+			sw.ResponseWriter = nil
+			statusWriterPool.Put(sw)
+		})
+	}
+}
+
+// requirePerm returns middleware that checks the caller's identity for the given permission.
+func (s *server) requirePerm(perm gateway.Permission) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			identity := gateway.IdentityFromContext(r.Context())
+			if identity == nil {
+				writeJSON(w, http.StatusUnauthorized, errorResponse("unauthorized"))
+				return
+			}
+			if !identity.Can(perm) {
+				writeJSON(w, http.StatusForbidden, errorResponse("insufficient permissions"))
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
 }
 
 // writeRateLimitError writes a 429 response with Retry-After header.

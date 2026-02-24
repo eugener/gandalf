@@ -11,6 +11,9 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/collectors"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/rs/dnscache"
 
 	gateway "github.com/eugener/gandalf/internal"
@@ -26,6 +29,8 @@ import (
 	"github.com/eugener/gandalf/internal/ratelimit"
 	"github.com/eugener/gandalf/internal/server"
 	"github.com/eugener/gandalf/internal/storage/sqlite"
+	"github.com/eugener/gandalf/internal/telemetry"
+	"go.opentelemetry.io/otel/trace"
 	"github.com/eugener/gandalf/internal/tokencount"
 	"github.com/eugener/gandalf/internal/worker"
 )
@@ -156,8 +161,46 @@ func run(configPath string) error {
 	// Workers.
 	workers := []worker.Worker{usageRecorder}
 	workers = append(workers, worker.NewQuotaSyncWorker(quotaTracker, store))
+	workers = append(workers, worker.NewUsageRollupWorker(store))
 
 	runner := worker.NewRunner(workers...)
+
+	// Prometheus metrics.
+	var metrics *telemetry.Metrics
+	var metricsHandler http.Handler
+	if cfg.Telemetry.Metrics.Enabled {
+		promRegistry := prometheus.NewRegistry()
+		promRegistry.MustRegister(collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
+		promRegistry.MustRegister(collectors.NewGoCollector())
+		metrics = telemetry.NewMetrics(promRegistry)
+		metricsHandler = promhttp.HandlerFor(promRegistry, promhttp.HandlerOpts{})
+		slog.Info("prometheus metrics enabled")
+	}
+
+	// OpenTelemetry tracing.
+	var tracer trace.Tracer
+	var tracingShutdown func(context.Context) error
+	if cfg.Telemetry.Tracing.Enabled {
+		endpoint := cfg.Telemetry.Tracing.Endpoint
+		if endpoint == "" {
+			endpoint = "localhost:4317"
+		}
+		sampleRate := cfg.Telemetry.Tracing.SampleRate
+		if sampleRate == 0 {
+			sampleRate = 0.1
+		}
+		shutdown, err := telemetry.SetupTracing(ctx, endpoint, sampleRate)
+		if err != nil {
+			slog.Warn("tracing setup failed, continuing without tracing", "error", err)
+		} else {
+			tracingShutdown = shutdown
+			tracer = telemetry.Tracer("gandalf/server")
+			slog.Info("opentelemetry tracing enabled",
+				"endpoint", endpoint,
+				"sample_rate", sampleRate,
+			)
+		}
+	}
 
 	// Create HTTP server
 	handler := server.New(server.Deps{
@@ -166,12 +209,16 @@ func run(configPath string) error {
 		Providers:    reg,
 		Router:       routerSvc,
 		Keys:         keys,
+		Store:        store,
 		ReadyCheck:   store.Ping,
 		Usage:        usageRecorder,
 		RateLimiter:  rateLimiter,
 		TokenCounter: tokenCounter,
-		Cache:        responseCache,
-		Quota:        quotaTracker,
+		Cache:          responseCache,
+		Quota:          quotaTracker,
+		Metrics:        metrics,
+		MetricsHandler: metricsHandler,
+		Tracer:         tracer,
 	})
 
 	srv := &http.Server{
@@ -249,6 +296,13 @@ func run(configPath string) error {
 	workerCancel()
 	if err := <-workerDone; err != nil {
 		slog.Error("worker shutdown error", "error", err)
+	}
+
+	// Shutdown tracing exporter.
+	if tracingShutdown != nil {
+		if err := tracingShutdown(shutdownCtx); err != nil {
+			slog.Error("tracing shutdown error", "error", err)
+		}
 	}
 
 	slog.Info("gandalf stopped")

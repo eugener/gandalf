@@ -41,6 +41,9 @@ type fakeNativeRouteStore struct {
 }
 
 func (f *fakeNativeRouteStore) CreateRoute(context.Context, *gateway.Route) error { return nil }
+func (f *fakeNativeRouteStore) GetRoute(context.Context, string) (*gateway.Route, error) {
+	return nil, gateway.ErrNotFound
+}
 func (f *fakeNativeRouteStore) GetRouteByAlias(_ context.Context, alias string) (*gateway.Route, error) {
 	pid, ok := f.routes[alias]
 	if !ok {
@@ -54,6 +57,7 @@ func (f *fakeNativeRouteStore) GetRouteByAlias(_ context.Context, alias string) 
 	}, nil
 }
 func (f *fakeNativeRouteStore) ListRoutes(context.Context) ([]*gateway.Route, error) { return nil, nil }
+func (f *fakeNativeRouteStore) CountRoutes(context.Context) (int, error)             { return 0, nil }
 func (f *fakeNativeRouteStore) UpdateRoute(context.Context, *gateway.Route) error    { return nil }
 func (f *fakeNativeRouteStore) DeleteRoute(context.Context, string) error            { return nil }
 

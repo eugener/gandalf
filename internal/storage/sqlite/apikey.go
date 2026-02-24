@@ -17,12 +17,16 @@ func (s *Store) CreateKey(ctx context.Context, key *gateway.APIKey) error {
 	if err != nil {
 		return err
 	}
+	role := key.Role
+	if role == "" {
+		role = "member"
+	}
 	_, err = s.write.ExecContext(ctx,
-		`INSERT INTO api_keys (id, key_hash, key_prefix, user_id, team_id, org_id,
+		`INSERT INTO api_keys (id, key_hash, key_prefix, user_id, team_id, org_id, role,
 		 allowed_models, rpm_limit, tpm_limit, max_budget, expires_at, blocked, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		key.ID, key.KeyHash, key.KeyPrefix,
-		nullStr(key.UserID), nullStr(key.TeamID), key.OrgID,
+		nullStr(key.UserID), nullStr(key.TeamID), key.OrgID, role,
 		models, key.RPMLimit, key.TPMLimit, key.MaxBudget,
 		timeToStr(key.ExpiresAt), boolToInt(key.Blocked), key.CreatedAt.UTC().Format(time.RFC3339),
 	)
@@ -32,7 +36,7 @@ func (s *Store) CreateKey(ctx context.Context, key *gateway.APIKey) error {
 // GetKeyByHash retrieves an API key by its SHA-256 hash.
 func (s *Store) GetKeyByHash(ctx context.Context, hash string) (*gateway.APIKey, error) {
 	row := s.read.QueryRowContext(ctx,
-		`SELECT id, key_hash, key_prefix, user_id, team_id, org_id,
+		`SELECT id, key_hash, key_prefix, user_id, team_id, org_id, role,
 		 allowed_models, rpm_limit, tpm_limit, max_budget, expires_at, blocked,
 		 last_used_at, created_at
 		 FROM api_keys WHERE key_hash = ?`, hash,
@@ -43,7 +47,7 @@ func (s *Store) GetKeyByHash(ctx context.Context, hash string) (*gateway.APIKey,
 // ListKeys returns API keys for an organization.
 func (s *Store) ListKeys(ctx context.Context, orgID string, offset, limit int) ([]*gateway.APIKey, error) {
 	rows, err := s.read.QueryContext(ctx,
-		`SELECT id, key_hash, key_prefix, user_id, team_id, org_id,
+		`SELECT id, key_hash, key_prefix, user_id, team_id, org_id, role,
 		 allowed_models, rpm_limit, tpm_limit, max_budget, expires_at, blocked,
 		 last_used_at, created_at
 		 FROM api_keys WHERE org_id = ? ORDER BY created_at DESC LIMIT ? OFFSET ?`,
@@ -71,10 +75,14 @@ func (s *Store) UpdateKey(ctx context.Context, key *gateway.APIKey) error {
 	if err != nil {
 		return err
 	}
+	role := key.Role
+	if role == "" {
+		role = "member"
+	}
 	result, err := s.write.ExecContext(ctx,
-		`UPDATE api_keys SET allowed_models=?, rpm_limit=?, tpm_limit=?, max_budget=?,
+		`UPDATE api_keys SET role=?, allowed_models=?, rpm_limit=?, tpm_limit=?, max_budget=?,
 		 expires_at=?, blocked=? WHERE id=?`,
-		models, key.RPMLimit, key.TPMLimit, key.MaxBudget,
+		role, models, key.RPMLimit, key.TPMLimit, key.MaxBudget,
 		timeToStr(key.ExpiresAt), boolToInt(key.Blocked), key.ID,
 	)
 	if err != nil {
@@ -114,15 +122,36 @@ func notFoundErr(err error) error {
 	return err
 }
 
+// GetKey retrieves an API key by its ID.
+func (s *Store) GetKey(ctx context.Context, id string) (*gateway.APIKey, error) {
+	row := s.read.QueryRowContext(ctx,
+		`SELECT id, key_hash, key_prefix, user_id, team_id, org_id, role,
+		 allowed_models, rpm_limit, tpm_limit, max_budget, expires_at, blocked,
+		 last_used_at, created_at
+		 FROM api_keys WHERE id = ?`, id,
+	)
+	return scanKey(row)
+}
+
+// CountKeys returns the total number of API keys for an organization.
+func (s *Store) CountKeys(ctx context.Context, orgID string) (int, error) {
+	var n int
+	err := s.read.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM api_keys WHERE org_id = ?`, orgID,
+	).Scan(&n)
+	return n, err
+}
+
 func scanKey(s scanner) (*gateway.APIKey, error) {
 	var k gateway.APIKey
 	var modelsJSON sql.NullString
 	var userID, teamID sql.NullString
+	var role sql.NullString
 	var expiresAt, lastUsedAt, createdAt sql.NullString
 	var blocked int
 
 	err := s.Scan(
-		&k.ID, &k.KeyHash, &k.KeyPrefix, &userID, &teamID, &k.OrgID,
+		&k.ID, &k.KeyHash, &k.KeyPrefix, &userID, &teamID, &k.OrgID, &role,
 		&modelsJSON, &k.RPMLimit, &k.TPMLimit, &k.MaxBudget,
 		&expiresAt, &blocked, &lastUsedAt, &createdAt,
 	)
@@ -133,6 +162,10 @@ func scanKey(s scanner) (*gateway.APIKey, error) {
 	k.Blocked = blocked != 0
 	k.UserID = userID.String
 	k.TeamID = teamID.String
+	k.Role = role.String
+	if k.Role == "" {
+		k.Role = "member"
+	}
 
 	models, err := unmarshalStringSlice(modelsJSON)
 	if err != nil {

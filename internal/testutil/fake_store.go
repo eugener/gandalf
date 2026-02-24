@@ -76,21 +76,49 @@ func (s *FakeStore) DeleteRoute(_ context.Context, id string) error {
 	return nil
 }
 
+// --- RouteStore additions ---
+
+// GetRoute retrieves a route by ID.
+func (s *FakeStore) GetRoute(_ context.Context, id string) (*gateway.Route, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, r := range s.routes {
+		if r.ID == id {
+			return r, nil
+		}
+	}
+	return nil, gateway.ErrNotFound
+}
+
+// CountRoutes returns the total number of routes.
+func (s *FakeStore) CountRoutes(context.Context) (int, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return len(s.routes), nil
+}
+
 // --- Stubs for other Store interfaces ---
 
 func (s *FakeStore) CreateKey(context.Context, *gateway.APIKey) error                         { return nil }
+func (s *FakeStore) GetKey(context.Context, string) (*gateway.APIKey, error)                  { return nil, gateway.ErrNotFound }
 func (s *FakeStore) GetKeyByHash(context.Context, string) (*gateway.APIKey, error)            { return nil, gateway.ErrNotFound }
 func (s *FakeStore) ListKeys(context.Context, string, int, int) ([]*gateway.APIKey, error)    { return nil, nil }
+func (s *FakeStore) CountKeys(context.Context, string) (int, error)                           { return 0, nil }
 func (s *FakeStore) UpdateKey(context.Context, *gateway.APIKey) error                         { return nil }
 func (s *FakeStore) DeleteKey(context.Context, string) error                                  { return nil }
 func (s *FakeStore) TouchKeyUsed(context.Context, string) error                               { return nil }
 func (s *FakeStore) CreateProvider(context.Context, *gateway.ProviderConfig) error            { return nil }
 func (s *FakeStore) GetProvider(context.Context, string) (*gateway.ProviderConfig, error)     { return nil, gateway.ErrNotFound }
 func (s *FakeStore) ListProviders(context.Context) ([]*gateway.ProviderConfig, error)         { return nil, nil }
+func (s *FakeStore) CountProviders(context.Context) (int, error)                              { return 0, nil }
 func (s *FakeStore) UpdateProvider(context.Context, *gateway.ProviderConfig) error            { return nil }
 func (s *FakeStore) DeleteProvider(context.Context, string) error                             { return nil }
 func (s *FakeStore) InsertUsage(context.Context, []gateway.UsageRecord) error                 { return nil }
 func (s *FakeStore) SumUsageCost(context.Context, string) (float64, error)                   { return 0, nil }
+func (s *FakeStore) QueryUsage(context.Context, gateway.UsageFilter) ([]gateway.UsageRecord, error) { return nil, nil }
+func (s *FakeStore) CountUsage(context.Context, gateway.UsageFilter) (int, error)            { return 0, nil }
+func (s *FakeStore) UpsertRollup(context.Context, []gateway.UsageRollup) error               { return nil }
+func (s *FakeStore) QueryRollups(context.Context, gateway.RollupFilter) ([]gateway.UsageRollup, error) { return nil, nil }
 func (s *FakeStore) CreateOrg(context.Context, *gateway.Organization) error                   { return nil }
 func (s *FakeStore) GetOrg(context.Context, string) (*gateway.Organization, error)            { return nil, gateway.ErrNotFound }
 func (s *FakeStore) ListOrgs(context.Context, int, int) ([]*gateway.Organization, error)      { return nil, nil }

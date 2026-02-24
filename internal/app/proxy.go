@@ -7,9 +7,15 @@ import (
 	"log/slog"
 	"net/http"
 
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
+
 	gateway "github.com/eugener/gandalf/internal"
 	"github.com/eugener/gandalf/internal/provider"
 )
+
+var proxyTracer = otel.Tracer("gandalf/proxy")
 
 // ProxyService forwards chat completion requests to the appropriate LLM provider
 // based on model routing configuration. It supports priority failover: on
@@ -43,7 +49,16 @@ func (ps *ProxyService) ChatCompletion(ctx context.Context, req *gateway.ChatReq
 
 		outReq := *req
 		outReq.Model = target.Model
-		resp, err := p.ChatCompletion(ctx, &outReq)
+
+		callCtx, span := proxyTracer.Start(ctx, "provider.ChatCompletion",
+			trace.WithAttributes(
+				attribute.String("provider", target.ProviderID),
+				attribute.String("model", target.Model),
+			),
+		)
+		resp, err := p.ChatCompletion(callCtx, &outReq)
+		span.End()
+
 		if err != nil {
 			if isClientError(err) {
 				return nil, err

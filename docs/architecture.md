@@ -14,15 +14,19 @@ gandalf/
       apikey.go                    # API key auth: hash -> otter cache -> DB fallback
     server/
       server.go                    # New(Deps) http.Handler, route registration (chi), dep interfaces
+      admin.go                     # Admin CRUD handlers: providers, keys, routes, cache purge, usage query
       proxy.go                     # handleChatCompletion (non-stream + stream), TPM consume/adjust, usage recording, cache
       cache.go                     # cacheKey (SHA-256), isCacheable, Cache interface
       native.go                    # Native API passthrough: handleNativeProxy, normalizeAuth, route mounting
       sse.go                       # SSE write helpers: writeSSEHeaders, writeSSEData, writeSSEDone, writeSSEKeepAlive
       embeddings.go                # handleEmbeddings handler with TPM + usage recording
       models.go                    # handleListModels handler (aggregates from all providers)
-      middleware.go                # recovery, requestID, logging, authenticate, rateLimit (RPM), quota, headers
+      metrics.go                   # metricsMiddleware (duration, status, active count), routePattern helper
+      middleware.go                # recovery, requestID, logging, authenticate, rateLimit, requirePerm, tracing
       health.go                    # handleHealthz, handleReadyz
       server_test.go               # Handler tests with inline fakes
+      admin_test.go                # Admin CRUD + RBAC enforcement tests
+      metrics_test.go              # Prometheus metrics integration tests
       server_bench_test.go         # Benchmarks: ChatCompletion, Stream, Healthz
       native_test.go               # Native passthrough E2E tests: Anthropic, Gemini, Azure, Ollama
       sse_test.go                  # SSE write helper unit tests
@@ -71,6 +75,7 @@ gandalf/
       worker.go                    # Worker interface: Run(ctx) error
       runner.go                    # errgroup-based runner, cancel-on-first-error
       usage_recorder.go            # Buffered channel -> batch DB flush (100 records or 5s)
+      usage_rollup.go              # Periodic aggregation of raw usage into hourly rollups
       quota_sync.go                # Periodic quota counter reload from DB (60s)
       *_test.go
     storage/
@@ -78,7 +83,10 @@ gandalf/
       sqlite/
         db.go, apikey.go, provider.go, route.go, org.go, usage.go
         sqlite_test.go
-        migrations/001_init.sql
+        migrations/001_init.sql, 002_key_role.sql, 003_usage_rollups.sql
+    telemetry/
+      metrics.go                     # Prometheus Metrics struct + NewMetrics(registerer)
+      tracing.go                     # SetupTracing (OTLP gRPC) + Tracer() helper
     testutil/
       fake_provider.go             # FakeProvider with configurable callbacks + FakeStreamChan
       fake_store.go                # In-memory FakeStore implementing storage.Store
@@ -138,10 +146,10 @@ type Authenticator interface {
 ```go
 // internal/storage/storage.go
 type Store interface {
-    APIKeyStore   // CreateKey, GetKeyByHash, ListKeys, UpdateKey, DeleteKey, TouchKeyUsed
-    ProviderStore // CreateProvider, GetProvider, ListProviders, UpdateProvider, DeleteProvider
-    RouteStore    // CreateRoute, GetRouteByAlias, ListRoutes, UpdateRoute, DeleteRoute
-    UsageStore    // InsertUsage(ctx, []UsageRecord)
+    APIKeyStore   // CreateKey, GetKey, GetKeyByHash, ListKeys, CountKeys, UpdateKey, DeleteKey, TouchKeyUsed
+    ProviderStore // CreateProvider, GetProvider, ListProviders, CountProviders, UpdateProvider, DeleteProvider
+    RouteStore    // CreateRoute, GetRoute, GetRouteByAlias, ListRoutes, CountRoutes, UpdateRoute, DeleteRoute
+    UsageStore    // InsertUsage, SumUsageCost, QueryUsage, CountUsage, UpsertRollup, QueryRollups
     OrgStore      // CRUD for orgs + teams
     Close() error
 }

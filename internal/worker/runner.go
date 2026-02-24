@@ -37,6 +37,8 @@ func workerName(w Worker) string {
 		return "usage_recorder"
 	case *QuotaSyncWorker:
 		return "quota_sync"
+	case *UsageRollupWorker:
+		return "usage_rollup"
 	default:
 		return "unknown"
 	}

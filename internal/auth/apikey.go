@@ -102,10 +102,11 @@ func (a *APIKeyAuth) Authenticate(ctx context.Context, r *http.Request) (*gatewa
 }
 
 // buildIdentity constructs an Identity from a validated API key.
-// All API key callers get the "member" role for now; per-key roles
-// are not yet stored in the DB (planned for Phase 2 RBAC).
 func buildIdentity(key *gateway.APIKey) *gateway.Identity {
-	role := "member"
+	role := key.Role
+	if role == "" {
+		role = "member"
+	}
 	perms := gateway.RolePermissions[role]
 	id := &gateway.Identity{
 		Subject:    key.KeyPrefix,

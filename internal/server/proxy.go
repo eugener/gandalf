@@ -40,11 +40,17 @@ func (s *server) handleChatCompletion(w http.ResponseWriter, r *http.Request) {
 	if !req.Stream && s.deps.Cache != nil && isCacheable(&req) {
 		key := cacheKey(identity.KeyID, &req)
 		if data, ok := s.deps.Cache.Get(r.Context(), key); ok {
+			if s.deps.Metrics != nil {
+				s.deps.Metrics.CacheHits.Inc()
+			}
 			s.recordUsage(r, req.Model, nil, 0, true)
 			w.Header()["Content-Type"] = jsonCT
 			w.WriteHeader(http.StatusOK)
 			w.Write(data)
 			return
+		}
+		if s.deps.Metrics != nil {
+			s.deps.Metrics.CacheMisses.Inc()
 		}
 	}
 
@@ -159,6 +165,9 @@ func (s *server) consumeTPM(w http.ResponseWriter, identity *gateway.Identity, e
 		result := limiter.ConsumeTPM(estimated)
 		setTPMHeaders(w, result)
 		if !result.Allowed {
+			if s.deps.Metrics != nil {
+				s.deps.Metrics.RateLimitRejects.WithLabelValues("tpm").Inc()
+			}
 			writeRateLimitError(w, result)
 			return false
 		}

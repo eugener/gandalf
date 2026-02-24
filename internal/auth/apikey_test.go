@@ -49,9 +49,11 @@ func (s *fakeKeyStore) GetKeyByHash(_ context.Context, hash string) (*gateway.AP
 	return k, nil
 }
 
+func (s *fakeKeyStore) GetKey(context.Context, string) (*gateway.APIKey, error) { return nil, gateway.ErrNotFound }
 func (s *fakeKeyStore) ListKeys(context.Context, string, int, int) ([]*gateway.APIKey, error) {
 	return nil, nil
 }
+func (s *fakeKeyStore) CountKeys(context.Context, string) (int, error) { return 0, nil }
 func (s *fakeKeyStore) UpdateKey(context.Context, *gateway.APIKey) error { return nil }
 func (s *fakeKeyStore) DeleteKey(context.Context, string) error          { return nil }
 
@@ -336,5 +338,44 @@ func TestBuildIdentity(t *testing.T) {
 	}
 	if id.AuthMethod != "apikey" {
 		t.Errorf("AuthMethod = %q, want apikey", id.AuthMethod)
+	}
+}
+
+func TestBuildIdentity_AdminRole(t *testing.T) {
+	t.Parallel()
+
+	key := &gateway.APIKey{
+		KeyPrefix: "gnd_admin_key",
+		OrgID:     "org-x",
+		Role:      "admin",
+	}
+	id := buildIdentity(key)
+
+	if id.Role != "admin" {
+		t.Errorf("Role = %q, want admin", id.Role)
+	}
+	if id.Perms != gateway.RolePermissions["admin"] {
+		t.Errorf("Perms = %v, want admin perms", id.Perms)
+	}
+	if !id.Can(gateway.PermManageProviders) {
+		t.Error("admin should have PermManageProviders")
+	}
+	if !id.Can(gateway.PermManageAllKeys) {
+		t.Error("admin should have PermManageAllKeys")
+	}
+}
+
+func TestBuildIdentity_EmptyRoleDefaultsMember(t *testing.T) {
+	t.Parallel()
+
+	key := &gateway.APIKey{
+		KeyPrefix: "gnd_empty_role",
+		OrgID:     "org-x",
+		Role:      "",
+	}
+	id := buildIdentity(key)
+
+	if id.Role != "member" {
+		t.Errorf("Role = %q, want member", id.Role)
 	}
 }

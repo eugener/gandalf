@@ -17,9 +17,28 @@ type Config struct {
 	Auth       AuthConfig       `yaml:"auth"`
 	RateLimits RateLimitConfig  `yaml:"rate_limits"`
 	Cache      CacheConfig      `yaml:"cache"`
+	Telemetry  TelemetryConfig  `yaml:"telemetry"`
 	Providers  []ProviderEntry  `yaml:"providers"`
 	Routes     []RouteEntry     `yaml:"routes"`
 	Keys       []KeyEntry       `yaml:"keys"`
+}
+
+// TelemetryConfig holds observability settings.
+type TelemetryConfig struct {
+	Metrics MetricsConfig `yaml:"metrics"`
+	Tracing TracingConfig `yaml:"tracing"`
+}
+
+// MetricsConfig controls Prometheus metrics.
+type MetricsConfig struct {
+	Enabled bool `yaml:"enabled"`
+}
+
+// TracingConfig controls OpenTelemetry tracing.
+type TracingConfig struct {
+	Enabled    bool    `yaml:"enabled"`
+	Endpoint   string  `yaml:"endpoint"`    // OTLP gRPC endpoint
+	SampleRate float64 `yaml:"sample_rate"` // 0.0 to 1.0
 }
 
 // RateLimitConfig holds default rate limiting settings.
