@@ -99,7 +99,7 @@ func TestChatCompletion(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := New("test-key", srv.URL+"/v1beta", nil)
+	client := New("gemini", "test-key", srv.URL+"/v1beta", nil)
 	resp, err := client.ChatCompletion(context.Background(), &gateway.ChatRequest{
 		Model:    "gemini-2.0-flash",
 		Messages: []gateway.Message{{Role: "user", Content: json.RawMessage(`"hi"`)}},
@@ -126,7 +126,7 @@ func TestChatCompletionStreamEOFTerminated(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := New("test-key", srv.URL+"/v1beta", nil)
+	client := New("gemini", "test-key", srv.URL+"/v1beta", nil)
 	ch, err := client.ChatCompletionStream(context.Background(), &gateway.ChatRequest{
 		Model:    "gemini-2.0-flash",
 		Messages: []gateway.Message{{Role: "user", Content: json.RawMessage(`"hi"`)}},

@@ -5,6 +5,7 @@ LLM gateway that sits between your applications and LLM providers, adding authen
 ## Features
 
 - **Multi-provider** -- OpenAI, Anthropic, Gemini, Ollama with unified OpenAI-compatible API
+- **Multi-instance** -- multiple instances of the same provider type (e.g. `openai-us`, `openai-eu`) with independent credentials and routing
 - **Native passthrough** -- forward requests directly to provider APIs without translation
 - **Priority failover** -- automatic fallback across providers on errors
 - **SSE streaming** -- real-time streaming with keep-alive and cancellation support
@@ -83,7 +84,24 @@ YAML config with `${ENV_VAR}` expansion. See [`configs/gandalf.yaml`](configs/ga
 ./bin/gandalf -config configs/gandalf.yaml
 ```
 
-Key sections: `server` (address, timeouts), `database` (SQLite DSN), `providers` (credentials, models, priority), `routes` (model alias to provider mapping), `rate_limits` (RPM/TPM defaults), `cache` (size, TTL), `keys` (bootstrap API keys with roles).
+Key sections: `server` (address, timeouts), `database` (SQLite DSN), `providers` (name, type, credentials, models, priority), `routes` (model alias to provider mapping), `rate_limits` (RPM/TPM defaults), `cache` (size, TTL), `keys` (bootstrap API keys with roles).
+
+Provider `name` is the instance identifier (registry key, DB primary key, route target reference). Provider `type` selects the wire format (`openai`, `anthropic`, `gemini`, `ollama`). When `type` is omitted, it defaults to `name` for backward compatibility.
+
+```yaml
+providers:
+  - name: openai-us          # instance ID
+    type: openai              # wire format (defaults to name if omitted)
+    base_url: https://api.openai.com/v1
+    api_key: "${OPENAI_US_KEY}"
+    models: [gpt-4o]
+
+  - name: openai-eu
+    type: openai
+    base_url: https://eu.api.openai.com/v1
+    api_key: "${OPENAI_EU_KEY}"
+    models: [gpt-4o]
+```
 
 ## Auth
 
@@ -120,7 +138,7 @@ internal/
   gateway.go           domain types + interfaces (no project imports)
   server/              HTTP handlers + middleware (chi), SSE streaming, native passthrough
   app/                 ProxyService (failover), RouterService (cached routing), KeyManager
-  provider/            Registry + adapters (openai, anthropic, gemini, ollama)
+  provider/            Registry (keyed by instance name) + adapters (openai, anthropic, gemini, ollama)
   auth/                API key auth with otter cache, per-key roles
   ratelimit/           dual token bucket (RPM+TPM), Registry, QuotaTracker
   cache/               W-TinyLFU in-memory cache (otter)

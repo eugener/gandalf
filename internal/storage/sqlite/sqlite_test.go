@@ -97,6 +97,7 @@ func TestProviderRoundTrip(t *testing.T) {
 	p := &gateway.ProviderConfig{
 		ID:        "prov-1",
 		Name:      "openai",
+		Type:      "openai",
 		BaseURL:   "https://api.openai.com/v1",
 		APIKeyEnc: "enc-key",
 		Models:    []string{"gpt-4o"},

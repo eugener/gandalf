@@ -14,9 +14,9 @@ func (s *Store) CreateProvider(ctx context.Context, p *gateway.ProviderConfig) e
 		return err
 	}
 	_, err = s.write.ExecContext(ctx,
-		`INSERT INTO providers (id, name, base_url, api_key_enc, models, priority, weight, enabled, max_rps, timeout_ms)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		p.ID, p.Name, p.BaseURL, p.APIKeyEnc, models,
+		`INSERT INTO providers (id, name, type, base_url, api_key_enc, models, priority, weight, enabled, max_rps, timeout_ms)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		p.ID, p.Name, p.Type, p.BaseURL, p.APIKeyEnc, models,
 		p.Priority, p.Weight, boolToInt(p.Enabled), p.MaxRPS, p.TimeoutMs,
 	)
 	return err
@@ -25,7 +25,7 @@ func (s *Store) CreateProvider(ctx context.Context, p *gateway.ProviderConfig) e
 // GetProvider retrieves a provider by ID.
 func (s *Store) GetProvider(ctx context.Context, id string) (*gateway.ProviderConfig, error) {
 	row := s.read.QueryRowContext(ctx,
-		`SELECT id, name, base_url, api_key_enc, models, priority, weight, enabled, max_rps, timeout_ms
+		`SELECT id, name, type, base_url, api_key_enc, models, priority, weight, enabled, max_rps, timeout_ms
 		 FROM providers WHERE id=?`, id,
 	)
 	return scanProvider(row)
@@ -34,7 +34,7 @@ func (s *Store) GetProvider(ctx context.Context, id string) (*gateway.ProviderCo
 // ListProviders returns all provider configurations.
 func (s *Store) ListProviders(ctx context.Context) ([]*gateway.ProviderConfig, error) {
 	rows, err := s.read.QueryContext(ctx,
-		`SELECT id, name, base_url, api_key_enc, models, priority, weight, enabled, max_rps, timeout_ms
+		`SELECT id, name, type, base_url, api_key_enc, models, priority, weight, enabled, max_rps, timeout_ms
 		 FROM providers ORDER BY priority ASC`,
 	)
 	if err != nil {
@@ -60,9 +60,9 @@ func (s *Store) UpdateProvider(ctx context.Context, p *gateway.ProviderConfig) e
 		return err
 	}
 	result, err := s.write.ExecContext(ctx,
-		`UPDATE providers SET name=?, base_url=?, api_key_enc=?, models=?,
+		`UPDATE providers SET name=?, type=?, base_url=?, api_key_enc=?, models=?,
 		 priority=?, weight=?, enabled=?, max_rps=?, timeout_ms=? WHERE id=?`,
-		p.Name, p.BaseURL, p.APIKeyEnc, models,
+		p.Name, p.Type, p.BaseURL, p.APIKeyEnc, models,
 		p.Priority, p.Weight, boolToInt(p.Enabled), p.MaxRPS, p.TimeoutMs, p.ID,
 	)
 	if err != nil {
@@ -86,7 +86,7 @@ func scanProvider(s scanner) (*gateway.ProviderConfig, error) {
 	var enabled int
 
 	err := s.Scan(
-		&p.ID, &p.Name, &p.BaseURL, &p.APIKeyEnc, &modelsJSON,
+		&p.ID, &p.Name, &p.Type, &p.BaseURL, &p.APIKeyEnc, &modelsJSON,
 		&p.Priority, &p.Weight, &enabled, &p.MaxRPS, &p.TimeoutMs,
 	)
 	if err != nil {

@@ -36,6 +36,7 @@ func (fakeAuth) Authenticate(_ context.Context, _ *http.Request) (*gateway.Ident
 type fakeProvider struct{}
 
 func (fakeProvider) Name() string { return "fake" }
+func (fakeProvider) Type() string { return "fake" }
 func (fakeProvider) ChatCompletion(_ context.Context, _ *gateway.ChatRequest) (*gateway.ChatResponse, error) {
 	return &gateway.ChatResponse{
 		ID:      "chatcmpl-test",

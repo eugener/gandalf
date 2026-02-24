@@ -36,7 +36,7 @@ func TestStreamOpenAIPassthrough(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	h := buildHandler(t, "openai", "gpt-4o", openai.New("key", upstream.URL+"/v1", nil))
+	h := buildHandler(t, "openai", "gpt-4o", openai.New("openai", "key", upstream.URL+"/v1", nil))
 
 	body := `{"model":"gpt-4o","messages":[{"role":"user","content":"hi"}],"stream":true}`
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
@@ -69,7 +69,7 @@ func TestStreamAnthropicTranslation(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	h := buildHandler(t, "anthropic", "claude-sonnet-4-6", anthropic.New("key", upstream.URL+"/v1", nil))
+	h := buildHandler(t, "anthropic", "claude-sonnet-4-6", anthropic.New("anthropic", "key", upstream.URL+"/v1", nil))
 
 	body := `{"model":"claude-sonnet-4-6","messages":[{"role":"user","content":"hi"}],"stream":true}`
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
@@ -95,7 +95,7 @@ func TestStreamGeminiEOFHandling(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	h := buildHandler(t, "gemini", "gemini-2.0-flash", gemini.New("key", upstream.URL+"/v1beta", nil))
+	h := buildHandler(t, "gemini", "gemini-2.0-flash", gemini.New("gemini", "key", upstream.URL+"/v1beta", nil))
 
 	body := `{"model":"gemini-2.0-flash","messages":[{"role":"user","content":"hi"}],"stream":true}`
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))

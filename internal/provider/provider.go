@@ -40,6 +40,18 @@ func (r *Registry) Get(name string) (gateway.Provider, error) {
 	return p, nil
 }
 
+// GetByType returns the first provider whose Type() matches typeName.
+func (r *Registry) GetByType(typeName string) (gateway.Provider, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	for _, p := range r.providers {
+		if p.Type() == typeName {
+			return p, nil
+		}
+	}
+	return nil, fmt.Errorf("no provider of type %q registered", typeName)
+}
+
 // List returns a sorted slice of all registered provider names.
 func (r *Registry) List() []string {
 	r.mu.RLock()

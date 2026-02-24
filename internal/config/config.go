@@ -75,6 +75,7 @@ type AuthConfig struct {
 // ProviderEntry is a provider definition in the config file.
 type ProviderEntry struct {
 	Name      string   `yaml:"name"`
+	Type      string   `yaml:"type"`
 	BaseURL   string   `yaml:"base_url"`
 	APIKey    string   `yaml:"api_key"`
 	Models    []string `yaml:"models"`
@@ -88,6 +89,14 @@ type ProviderEntry struct {
 // IsEnabled reports whether the provider is enabled (defaults to true when nil).
 func (p ProviderEntry) IsEnabled() bool {
 	return p.Enabled == nil || *p.Enabled
+}
+
+// ResolvedType returns Type if set, otherwise falls back to Name for backward compatibility.
+func (p ProviderEntry) ResolvedType() string {
+	if p.Type != "" {
+		return p.Type
+	}
+	return p.Name
 }
 
 // RouteEntry is a route definition in the config file.

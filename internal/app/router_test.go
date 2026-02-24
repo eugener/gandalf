@@ -42,18 +42,9 @@ func TestResolveModel_NoRoute(t *testing.T) {
 	store := testutil.NewFakeStore()
 	rs := NewRouterService(store)
 
-	targets, err := rs.ResolveModel(context.Background(), "unknown-model")
-	if err != nil {
-		t.Fatalf("ResolveModel: %v", err)
-	}
-	if len(targets) != 1 {
-		t.Fatalf("got %d targets, want 1", len(targets))
-	}
-	if targets[0].ProviderID != "openai" {
-		t.Errorf("default provider = %q, want openai", targets[0].ProviderID)
-	}
-	if targets[0].Model != "unknown-model" {
-		t.Errorf("model = %q, want unknown-model", targets[0].Model)
+	_, err := rs.ResolveModel(context.Background(), "unknown-model")
+	if err == nil {
+		t.Fatal("expected error for unrouted model")
 	}
 }
 

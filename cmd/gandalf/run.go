@@ -91,22 +91,22 @@ func run(configPath string) error {
 			continue
 		}
 		var prov gateway.Provider
-		switch p.Name {
+		switch p.ResolvedType() {
 		case "openai":
-			prov = openai.New(p.APIKey, p.BaseURL, dnsResolver)
+			prov = openai.New(p.Name, p.APIKey, p.BaseURL, dnsResolver)
 		case "anthropic":
-			prov = anthropic.New(p.APIKey, p.BaseURL, dnsResolver)
+			prov = anthropic.New(p.Name, p.APIKey, p.BaseURL, dnsResolver)
 		case "gemini":
-			prov = gemini.New(p.APIKey, p.BaseURL, dnsResolver)
+			prov = gemini.New(p.Name, p.APIKey, p.BaseURL, dnsResolver)
 		case "ollama":
-			prov = ollama.New(p.APIKey, p.BaseURL, dnsResolver)
+			prov = ollama.New(p.Name, p.APIKey, p.BaseURL, dnsResolver)
 		default:
-			slog.Warn("unknown provider, skipping", "name", p.Name)
+			slog.Warn("unknown provider type, skipping", "name", p.Name, "type", p.ResolvedType())
 			continue
 		}
 		_, hasNative := prov.(gateway.NativeProxy)
 		reg.Register(p.Name, prov)
-		slog.Info("provider registered", "name", p.Name, "native_proxy", hasNative)
+		slog.Info("provider registered", "name", p.Name, "type", p.ResolvedType(), "native_proxy", hasNative)
 	}
 
 	for _, r := range cfg.Routes {

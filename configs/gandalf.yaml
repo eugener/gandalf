@@ -12,6 +12,7 @@ auth:
 
 providers:
   - name: openai
+    type: openai   # wire format; defaults to name when omitted
     base_url: https://api.openai.com/v1
     api_key: "${OPENAI_API_KEY}"
     models:

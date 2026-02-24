@@ -16,13 +16,20 @@ import (
 // fakeNativeProvider implements both gateway.Provider and gateway.NativeProxy.
 type fakeNativeProvider struct {
 	fakeProvider
-	name        string
-	lastPath    string
-	lastBody    string
-	lastHeaders http.Header
+	name         string
+	providerType string
+	lastPath     string
+	lastBody     string
+	lastHeaders  http.Header
 }
 
 func (f *fakeNativeProvider) Name() string { return f.name }
+func (f *fakeNativeProvider) Type() string {
+	if f.providerType != "" {
+		return f.providerType
+	}
+	return f.name
+}
 
 func (f *fakeNativeProvider) ProxyRequest(_ context.Context, w http.ResponseWriter, r *http.Request, path string) error {
 	f.lastPath = path

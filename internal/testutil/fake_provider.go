@@ -10,6 +10,7 @@ import (
 // FakeProvider is a configurable gateway.Provider for testing.
 type FakeProvider struct {
 	ProviderName string
+	ProviderType string
 	ChatFn       func(ctx context.Context, req *gateway.ChatRequest) (*gateway.ChatResponse, error)
 	StreamFn     func(ctx context.Context, req *gateway.ChatRequest) (<-chan gateway.StreamChunk, error)
 	EmbedFn      func(ctx context.Context, req *gateway.EmbeddingRequest) (*gateway.EmbeddingResponse, error)
@@ -17,8 +18,16 @@ type FakeProvider struct {
 	HealthFn     func(ctx context.Context) error
 }
 
-// Name returns the configured provider name.
+// Name returns the configured instance name.
 func (f *FakeProvider) Name() string { return f.ProviderName }
+
+// Type returns the configured provider type. Defaults to ProviderName if unset.
+func (f *FakeProvider) Type() string {
+	if f.ProviderType != "" {
+		return f.ProviderType
+	}
+	return f.ProviderName
+}
 
 // ChatCompletion delegates to ChatFn or returns a default response.
 func (f *FakeProvider) ChatCompletion(ctx context.Context, req *gateway.ChatRequest) (*gateway.ChatResponse, error) {

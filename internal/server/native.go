@@ -5,7 +5,6 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/tidwall/gjson"
@@ -162,13 +161,13 @@ func (s *server) handleNativeProxy(providerType string,
 			return
 		}
 
-		// Find matching provider that implements NativeProxy.
+		// Find matching provider that implements NativeProxy and has the right type.
 		for _, target := range targets {
-			if !strings.EqualFold(target.ProviderID, providerType) {
-				continue
-			}
 			p, pErr := s.deps.Providers.Get(target.ProviderID)
 			if pErr != nil {
+				continue
+			}
+			if p.Type() != providerType {
 				continue
 			}
 			np, ok := p.(gateway.NativeProxy)
@@ -201,7 +200,7 @@ func (s *server) handleNativeProxy(providerType string,
 func (s *server) handleNativeProxyList(providerType, path string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		// Find any registered provider of the given type.
-		p, err := s.deps.Providers.Get(providerType)
+		p, err := s.deps.Providers.GetByType(providerType)
 		if err != nil {
 			writeJSON(w, http.StatusBadGateway, errorResponse("no "+providerType+" provider registered"))
 			return

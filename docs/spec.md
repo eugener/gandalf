@@ -223,7 +223,8 @@ package gateway
 // --- Provider ---
 
 type Provider interface {
-    Name() string
+    Name() string  // instance ID (e.g. "openai-us")
+    Type() string  // wire format (e.g. "openai")
     ChatCompletion(ctx context.Context, req *ChatRequest) (*ChatResponse, error)
     ChatCompletionStream(ctx context.Context, req *ChatRequest) (<-chan StreamChunk, error)
     Embeddings(ctx context.Context, req *EmbeddingRequest) (*EmbeddingResponse, error)
@@ -435,7 +436,7 @@ Organization (acme)         rpm=1000, tpm=100000, models=[gpt-4o, claude-*]
 
 - **organizations** -- id, name, allowed_models (JSON), rpm_limit, tpm_limit, max_budget, created_at
 - **teams** -- id, org_id (FK), name, allowed_models (JSON), rpm_limit, tpm_limit, max_budget
-- **providers** -- id, name, base_url, api_key_enc, models (JSON), priority, weight, enabled, max_rps, timeout_ms
+- **providers** -- id, name, type, base_url, api_key_enc, models (JSON), priority, weight, enabled, max_rps, timeout_ms
 - **api_keys** -- id, key_hash (SHA-256, indexed), key_prefix, user_id, team_id (FK), org_id (FK), allowed_models (JSON), rpm_limit, tpm_limit, max_budget, expires_at, blocked, last_used_at, metadata (JSON)
 - **routes** -- id, model_alias (unique), targets (JSON), strategy, cache_ttl_s
 - **usage_records** -- id, key_id, user_id, team_id, org_id, caller_jwt_sub, caller_service, model, provider_id, prompt_tokens, completion_tokens, total_tokens, cost_usd, cached, latency_ms, status_code, request_id, created_at (append-only, indexed by key_id+created_at)
@@ -755,8 +756,8 @@ SSE streaming (channel-based, 8-buffer), Anthropic adapter (Messages API, SSE ev
 **Phase 3 -- Rate Limiting + Caching + Usage Recording + Token Counting + Quota (DONE):**
 Worker framework (`worker/` package: `Worker` interface, `Runner` with errgroup, `UsageRecorder` with buffered channel batch flush). Dual token-bucket rate limiter (`ratelimit/` package: lazy refill, RPM in middleware, TPM in handlers, `AdjustTPM` post-response correction, `Registry` with map+RWMutex). Rate limit headers (`X-Ratelimit-Limit-Requests`, `X-Ratelimit-Remaining-Requests`, `X-Ratelimit-Limit-Tokens`, `X-Ratelimit-Remaining-Tokens`, `Retry-After`). Token counting (`tokencount/` package: character-based heuristic ~4 chars/token). Response cache (`cache/` package: otter W-TinyLFU, per-entry TTL, SHA-256 cache keys from normalized requests, cacheable when temp <= 0.3 or seed set). Quota enforcement (`QuotaTracker`: in-memory spend tracking, `QuotaSyncWorker` periodic DB reload). Identity extended with `KeyID`, `RPMLimit`, `TPMLimit`, `MaxBudget`. Config: `rate_limits` and `cache` sections with defaults. Usage recording on all endpoints (chat, stream, embeddings). Rate limiting on all route groups (universal + native). Performance: AllowRPM ~76ns/0-alloc, baseline 53 allocs/op unchanged.
 
-**Phase 4 -- Admin API + Observability:**
-Admin CRUD endpoints (providers, keys, routes), Prometheus metrics with native histograms, OpenTelemetry tracing, usage aggregation. During this phase: separate `name` (instance ID) from `type` (wire format) in `ProviderEntry` config and provider registry to enable multi-instance support (prerequisite for Phase 4.5).
+**Phase 4 -- Admin API + Observability + Name/Type Split (DONE):**
+Admin CRUD endpoints (providers, keys, routes), Prometheus metrics with native histograms, OpenTelemetry tracing, usage aggregation. Provider Name/Type split: `Name()` = instance ID (registry key, DB PK), `Type()` = wire format constant. Config `type` defaults to `name` for backward compat. Registry keyed by instance name with `GetByType()` for native list endpoints. Router returns error for unrouted models (no hardcoded fallback).
 
 **Phase 4.5 -- Cloud Hosting Support:**
 Run existing provider types (OpenAI, Anthropic, Gemini) on Azure, AWS Bedrock, and GCP Vertex AI via configurable auth transports and hosting modes. See "Cloud Hosting" section below for full design.

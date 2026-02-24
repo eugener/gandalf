@@ -33,27 +33,33 @@ var (
 // and gateway.NativeProxy. It delegates translated (OpenAI-format) requests
 // to Ollama's OpenAI-compatible endpoint and raw native requests via ProxyRequest.
 type Client struct {
+	name    string
 	apiKey  string
 	baseURL string
 	http    *http.Client
 }
 
 // New creates an Ollama Client with a tuned http.Client.
+// name is the instance identifier; apiKey and baseURL configure the upstream.
 // If baseURL is empty, it defaults to "http://localhost:11434".
 // If resolver is non-nil, it wraps the transport's DialContext with cached DNS lookups.
-func New(apiKey, baseURL string, resolver *dnscache.Resolver) *Client {
+func New(name, apiKey, baseURL string, resolver *dnscache.Resolver) *Client {
 	if baseURL == "" {
 		baseURL = defaultBaseURL
 	}
 	return &Client{
+		name:    name,
 		apiKey:  apiKey,
 		baseURL: strings.TrimRight(baseURL, "/"),
 		http:    &http.Client{Transport: provider.NewTransport(resolver, false)}, // HTTP/1.1 for local Ollama
 	}
 }
 
-// Name returns the provider identifier.
-func (c *Client) Name() string { return providerName }
+// Name returns the instance identifier.
+func (c *Client) Name() string { return c.name }
+
+// Type returns the wire format identifier.
+func (c *Client) Type() string { return providerName }
 
 // openaiURL returns the OpenAI-compatible API base URL for Ollama.
 func (c *Client) openaiURL() string { return c.baseURL + "/v1" }

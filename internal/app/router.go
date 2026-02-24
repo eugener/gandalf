@@ -53,9 +53,7 @@ func (rs *RouterService) ResolveModel(ctx context.Context, model string) ([]Reso
 
 	route, err := rs.routeStore.GetRouteByAlias(ctx, model)
 	if err != nil {
-		// No configured route -- fall through to direct pass-through.
-		// Don't cache misses since the route may be added later.
-		return []ResolvedTarget{{ProviderID: "openai", Model: model, Priority: 1}}, nil //nolint:nilerr
+		return nil, fmt.Errorf("no route configured for model %q", model)
 	}
 
 	var targets []gateway.RouteTarget

@@ -125,7 +125,8 @@ cmd/gandalf  -- wires concrete types, DNS resolver, imports everything
 ```go
 // internal/gateway.go
 type Provider interface {
-    Name() string
+    Name() string  // instance ID (e.g. "openai-us")
+    Type() string  // wire format (e.g. "openai")
     ChatCompletion(ctx context.Context, req *ChatRequest) (*ChatResponse, error)
     ChatCompletionStream(ctx context.Context, req *ChatRequest) (<-chan StreamChunk, error)
     Embeddings(ctx context.Context, req *EmbeddingRequest) (*EmbeddingResponse, error)
@@ -188,7 +189,7 @@ On startup, `run.go` logs configuration for debuggability:
 - `starting gandalf` -- version (from git tag) and listen address
 - `database opened` -- DSN path
 - `api key configured` -- key name + `valid_prefix` (whether key has `gnd_` prefix); never logs key material
-- `provider registered` -- provider name + `native_proxy` support; or `provider skipped (disabled)`
+- `provider registered` -- provider name, type + `native_proxy` support; or `provider skipped (disabled)`
 - `route configured` -- model alias + target list (e.g. `openai/gpt-4o`)
 - `server timeouts` -- read/write/shutdown durations
 - `universal API enabled` -- list of universal endpoints

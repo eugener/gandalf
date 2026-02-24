@@ -22,6 +22,7 @@ func Bootstrap(ctx context.Context, cfg *Config, store storage.Store) error {
 		pc := &gateway.ProviderConfig{
 			ID:        p.Name,
 			Name:      p.Name,
+			Type:      p.ResolvedType(),
 			BaseURL:   p.BaseURL,
 			APIKeyEnc: "", // provider keys stay in memory only, never persisted
 			Models:    p.Models,

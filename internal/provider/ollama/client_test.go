@@ -36,7 +36,7 @@ func TestChatCompletion(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	c := New("", ts.URL, nil)
+	c := New("ollama", "", ts.URL, nil)
 	resp, err := c.ChatCompletion(context.Background(), &gateway.ChatRequest{
 		Model:    "llama3",
 		Messages: []gateway.Message{{Role: "user", Content: json.RawMessage(`"hi"`)}},
@@ -69,7 +69,7 @@ func TestChatCompletionStream(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	c := New("", ts.URL, nil)
+	c := New("ollama", "", ts.URL, nil)
 	ch, err := c.ChatCompletionStream(context.Background(), &gateway.ChatRequest{
 		Model:    "llama3",
 		Messages: []gateway.Message{{Role: "user", Content: json.RawMessage(`"hi"`)}},
@@ -106,7 +106,7 @@ func TestListModels(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	c := New("", ts.URL, nil)
+	c := New("ollama", "", ts.URL, nil)
 	models, err := c.ListModels(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -128,7 +128,7 @@ func TestHTTPError(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	c := New("", ts.URL, nil)
+	c := New("ollama", "", ts.URL, nil)
 	_, err := c.ChatCompletion(context.Background(), &gateway.ChatRequest{
 		Model:    "llama3",
 		Messages: []gateway.Message{{Role: "user", Content: json.RawMessage(`"hi"`)}},
@@ -155,7 +155,7 @@ func TestProxyRequest(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	c := New("test-key", ts.URL, nil)
+	c := New("ollama", "test-key", ts.URL, nil)
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/chat", strings.NewReader(`{"model":"llama3"}`))
 	req.Header.Set("Content-Type", "application/json")
@@ -174,7 +174,7 @@ func TestProxyRequest(t *testing.T) {
 
 func TestName(t *testing.T) {
 	t.Parallel()
-	c := New("", "", nil)
+	c := New("ollama", "", "", nil)
 	if c.Name() != "ollama" {
 		t.Errorf("Name() = %q, want ollama", c.Name())
 	}
@@ -182,7 +182,7 @@ func TestName(t *testing.T) {
 
 func TestDefaultBaseURL(t *testing.T) {
 	t.Parallel()
-	c := New("", "", nil)
+	c := New("ollama", "", "", nil)
 	if c.baseURL != defaultBaseURL {
 		t.Errorf("baseURL = %q, want %q", c.baseURL, defaultBaseURL)
 	}

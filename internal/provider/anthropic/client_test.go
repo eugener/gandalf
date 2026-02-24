@@ -103,7 +103,7 @@ func TestChatCompletion(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := New("test-key", srv.URL+"/v1", nil)
+	client := New("anthropic", "test-key", srv.URL+"/v1", nil)
 	resp, err := client.ChatCompletion(context.Background(), &gateway.ChatRequest{
 		Model:    "claude-sonnet-4-6",
 		Messages: []gateway.Message{{Role: "user", Content: json.RawMessage(`"hi"`)}},
@@ -138,7 +138,7 @@ func TestChatCompletionStream(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := New("test-key", srv.URL+"/v1", nil)
+	client := New("anthropic", "test-key", srv.URL+"/v1", nil)
 	ch, err := client.ChatCompletionStream(context.Background(), &gateway.ChatRequest{
 		Model:    "claude-sonnet-4-6",
 		Messages: []gateway.Message{{Role: "user", Content: json.RawMessage(`"hi"`)}},

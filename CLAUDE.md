@@ -18,7 +18,7 @@ All make targets set `GOEXPERIMENT=jsonv2` for lower alloc counts in JSON-heavy 
 
 ## Architecture
 
-Hexagonal architecture. Domain types at `internal/gateway.go`, interfaces at consumer level. Multi-provider support (OpenAI, Anthropic, Gemini, Ollama), priority failover routing, SSE streaming, native API passthrough. Per-key rate limiting, response caching, async usage recording, quota enforcement. Admin CRUD API with RBAC, usage aggregation, Prometheus metrics, OpenTelemetry tracing.
+Hexagonal architecture. Domain types at `internal/gateway.go`, interfaces at consumer level. Multi-provider support (OpenAI, Anthropic, Gemini, Ollama) with Name/Type split (instance ID vs wire format), priority failover routing, SSE streaming, native API passthrough. Per-key rate limiting, response caching, async usage recording, quota enforcement. Admin CRUD API with RBAC, usage aggregation, Prometheus metrics, OpenTelemetry tracing.
 
 Key packages:
 - `internal/gateway.go` -- domain types + interfaces (no project imports)
@@ -73,6 +73,7 @@ API keys require `gnd_` prefix. Set via `GANDALF_ADMIN_KEY` env var. Delete `gan
 - Interfaces defined at consumer, not alongside implementation
 - Table-driven tests with `t.Parallel()`
 - Inline fakes in `server_test.go`; `testutil/` for reusable fakes
+- Provider `Name()` = instance ID (registry key, DB PK), `Type()` = wire format (e.g. "openai"). Config `type` defaults to `name` for backward compat
 - Provider `apiError` types implement `HTTPStatus() int` for failover decisions
 - Context helpers: `ContextWithIdentity`, `IdentityFromContext`, `ContextWithRequestID`, `RequestIDFromContext`
 - Config supports `${ENV_VAR}` expansion; bootstrap seeds on first run (idempotent)

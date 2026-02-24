@@ -28,27 +28,33 @@ var (
 
 // Client is an Anthropic provider adapter that implements gateway.Provider.
 type Client struct {
+	name    string
 	apiKey  string
 	baseURL string
 	http    *http.Client
 }
 
 // New creates an Anthropic Client with a tuned http.Client.
+// name is the instance identifier; apiKey and baseURL configure the upstream.
 // If baseURL is empty, it defaults to "https://api.anthropic.com/v1".
 // If resolver is non-nil, it wraps the transport's DialContext with cached DNS lookups.
-func New(apiKey, baseURL string, resolver *dnscache.Resolver) *Client {
+func New(name, apiKey, baseURL string, resolver *dnscache.Resolver) *Client {
 	if baseURL == "" {
 		baseURL = defaultBaseURL
 	}
 	return &Client{
+		name:    name,
 		apiKey:  apiKey,
 		baseURL: strings.TrimRight(baseURL, "/"),
 		http:    &http.Client{Transport: provider.NewTransport(resolver, true)},
 	}
 }
 
-// Name returns the provider identifier.
-func (c *Client) Name() string { return providerName }
+// Name returns the instance identifier.
+func (c *Client) Name() string { return c.name }
+
+// Type returns the wire format identifier.
+func (c *Client) Type() string { return providerName }
 
 // ChatCompletion sends a non-streaming chat completion request to the Anthropic API.
 func (c *Client) ChatCompletion(ctx context.Context, req *gateway.ChatRequest) (*gateway.ChatResponse, error) {

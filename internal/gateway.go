@@ -16,8 +16,10 @@ import (
 
 // Provider is the interface that all LLM provider adapters must implement.
 type Provider interface {
-	// Name returns the provider identifier (e.g., "openai", "anthropic").
+	// Name returns the instance identifier (e.g., "openai-us", "openai-eu").
 	Name() string
+	// Type returns the wire format identifier (e.g., "openai", "anthropic").
+	Type() string
 	// ChatCompletion sends a non-streaming chat completion request.
 	ChatCompletion(ctx context.Context, req *ChatRequest) (*ChatResponse, error)
 	// ChatCompletionStream sends a streaming chat completion request.
@@ -216,6 +218,7 @@ var RolePermissions = map[string]Permission{
 type ProviderConfig struct {
 	ID        string   `json:"id"`
 	Name      string   `json:"name"`
+	Type      string   `json:"type"`
 	BaseURL   string   `json:"base_url"`
 	APIKeyEnc string   `json:"-"` // deprecated: no longer persisted, kept for schema compat
 	Models    []string `json:"models"`

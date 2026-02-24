@@ -41,7 +41,7 @@ func TestChatCompletionStream(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := New("test-key", srv.URL+"/v1", nil)
+	client := New("openai", "test-key", srv.URL+"/v1", nil)
 	ch, err := client.ChatCompletionStream(context.Background(), &gateway.ChatRequest{
 		Model:    "gpt-4o",
 		Messages: []gateway.Message{{Role: "user", Content: json.RawMessage(`"hi"`)}},
@@ -88,7 +88,7 @@ func TestChatCompletionStreamContextCancel(t *testing.T) {
 	defer srv.Close()
 
 	ctx, cancel := context.WithCancel(context.Background())
-	client := New("test-key", srv.URL+"/v1", nil)
+	client := New("openai", "test-key", srv.URL+"/v1", nil)
 	ch, err := client.ChatCompletionStream(ctx, &gateway.ChatRequest{
 		Model:    "gpt-4o",
 		Messages: []gateway.Message{{Role: "user", Content: json.RawMessage(`"hi"`)}},
@@ -123,7 +123,7 @@ func TestChatCompletionStreamHTTPError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := New("test-key", srv.URL+"/v1", nil)
+	client := New("openai", "test-key", srv.URL+"/v1", nil)
 	_, err := client.ChatCompletionStream(context.Background(), &gateway.ChatRequest{
 		Model:    "gpt-4o",
 		Messages: []gateway.Message{{Role: "user", Content: json.RawMessage(`"hi"`)}},
@@ -145,7 +145,7 @@ func TestEmbeddings(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := New("test-key", srv.URL+"/v1", nil)
+	client := New("openai", "test-key", srv.URL+"/v1", nil)
 	resp, err := client.Embeddings(context.Background(), &gateway.EmbeddingRequest{
 		Model: "text-embedding-3-small",
 		Input: json.RawMessage(`"hello world"`),
