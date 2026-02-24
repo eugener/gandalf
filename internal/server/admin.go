@@ -1,9 +1,9 @@
 package server
 
 import (
-	"crypto/rand"
-	"encoding/base64"
 	"encoding/json"
+	"errors"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"time"
@@ -12,7 +12,39 @@ import (
 	"github.com/google/uuid"
 
 	gateway "github.com/eugener/gandalf/internal"
+	"github.com/eugener/gandalf/internal/app"
 )
+
+// maxAdminBody is the maximum allowed admin request body size (1 MB).
+const maxAdminBody = 1 << 20
+
+// decodeJSON limits body size, decodes JSON into v, and writes a 400 on error.
+// Returns true if decoding succeeded.
+func decodeJSON(w http.ResponseWriter, r *http.Request, v any) bool {
+	r.Body = http.MaxBytesReader(w, r.Body, maxAdminBody)
+	if err := json.NewDecoder(r.Body).Decode(v); err != nil {
+		writeJSON(w, http.StatusBadRequest, errorResponse("invalid request body"))
+		return false
+	}
+	return true
+}
+
+// writeAdminError logs the full error server-side and returns a sanitized
+// message to the client to avoid leaking internal details (e.g. SQLite errors).
+func writeAdminError(w http.ResponseWriter, r *http.Request, err error) {
+	status := errorStatus(err)
+	switch {
+	case errors.Is(err, gateway.ErrNotFound):
+		writeJSON(w, status, errorResponse("not found"))
+	case errors.Is(err, gateway.ErrConflict):
+		writeJSON(w, status, errorResponse("conflict"))
+	default:
+		slog.LogAttrs(r.Context(), slog.LevelError, "admin error",
+			slog.String("error", err.Error()),
+		)
+		writeJSON(w, status, errorResponse("internal error"))
+	}
+}
 
 // --- Pagination helpers ---
 
@@ -59,10 +91,10 @@ func (s *server) handleListProviders(w http.ResponseWriter, r *http.Request) {
 
 func (s *server) handleCreateProvider(w http.ResponseWriter, r *http.Request) {
 	var p gateway.ProviderConfig
-	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
-		writeJSON(w, http.StatusBadRequest, errorResponse("invalid request body"))
+	if !decodeJSON(w, r, &p) {
 		return
 	}
+	p.APIKeyEnc = "" // defense-in-depth: strip even though json:"-"
 	if p.Name == "" {
 		writeJSON(w, http.StatusBadRequest, errorResponse("name is required"))
 		return
@@ -71,7 +103,7 @@ func (s *server) handleCreateProvider(w http.ResponseWriter, r *http.Request) {
 		p.ID = p.Name
 	}
 	if err := s.deps.Store.CreateProvider(r.Context(), &p); err != nil {
-		writeJSON(w, http.StatusInternalServerError, errorResponse("failed to create provider"))
+		writeAdminError(w, r, err)
 		return
 	}
 	w.Header().Set("Location", "/admin/v1/providers/"+p.ID)
@@ -82,8 +114,7 @@ func (s *server) handleGetProvider(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	p, err := s.deps.Store.GetProvider(r.Context(), id)
 	if err != nil {
-		status := errorStatus(err)
-		writeJSON(w, status, errorResponse(err.Error()))
+		writeAdminError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, p)
@@ -92,14 +123,13 @@ func (s *server) handleGetProvider(w http.ResponseWriter, r *http.Request) {
 func (s *server) handleUpdateProvider(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	var p gateway.ProviderConfig
-	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
-		writeJSON(w, http.StatusBadRequest, errorResponse("invalid request body"))
+	if !decodeJSON(w, r, &p) {
 		return
 	}
+	p.APIKeyEnc = "" // defense-in-depth: strip even though json:"-"
 	p.ID = id
 	if err := s.deps.Store.UpdateProvider(r.Context(), &p); err != nil {
-		status := errorStatus(err)
-		writeJSON(w, status, errorResponse(err.Error()))
+		writeAdminError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, p)
@@ -108,8 +138,7 @@ func (s *server) handleUpdateProvider(w http.ResponseWriter, r *http.Request) {
 func (s *server) handleDeleteProvider(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	if err := s.deps.Store.DeleteProvider(r.Context(), id); err != nil {
-		status := errorStatus(err)
-		writeJSON(w, status, errorResponse(err.Error()))
+		writeAdminError(w, r, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -161,8 +190,7 @@ func (s *server) handleListKeys(w http.ResponseWriter, r *http.Request) {
 
 func (s *server) handleCreateKey(w http.ResponseWriter, r *http.Request) {
 	var req keyCreateRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, errorResponse("invalid request body"))
+	if !decodeJSON(w, r, &req) {
 		return
 	}
 	if req.OrgID == "" {
@@ -170,49 +198,29 @@ func (s *server) handleCreateKey(w http.ResponseWriter, r *http.Request) {
 		req.OrgID = identity.OrgID
 	}
 
-	// Generate random key.
-	raw := make([]byte, 32)
-	if _, err := rand.Read(raw); err != nil {
-		writeJSON(w, http.StatusInternalServerError, errorResponse("failed to generate key"))
-		return
-	}
-	plaintext := gateway.APIKeyPrefix + base64.RawURLEncoding.EncodeToString(raw)
-	hash := gateway.HashKey(plaintext)
-	prefix := plaintext
-	if len(prefix) > 12 {
-		prefix = prefix[:12]
-	}
-
-	role := req.Role
-	if role == "" {
-		role = "member"
-	}
-
-	key := &gateway.APIKey{
-		ID:            uuid.Must(uuid.NewV7()).String(),
-		KeyHash:       hash,
-		KeyPrefix:     prefix,
-		OrgID:         req.OrgID,
-		UserID:        req.UserID,
-		TeamID:        req.TeamID,
-		Role:          role,
-		AllowedModels: req.AllowedModels,
-		RPMLimit:      req.RPMLimit,
-		TPMLimit:      req.TPMLimit,
-		MaxBudget:     req.MaxBudget,
-		CreatedAt:     time.Now().UTC(),
-	}
+	var expiresAt *time.Time
 	if req.ExpiresAt != nil {
 		t, err := time.Parse(time.RFC3339, *req.ExpiresAt)
 		if err != nil {
 			writeJSON(w, http.StatusBadRequest, errorResponse("invalid expires_at format"))
 			return
 		}
-		key.ExpiresAt = &t
+		expiresAt = &t
 	}
 
-	if err := s.deps.Store.CreateKey(r.Context(), key); err != nil {
-		writeJSON(w, http.StatusInternalServerError, errorResponse("failed to create key"))
+	plaintext, key, err := s.deps.Keys.CreateKey(r.Context(), app.CreateKeyOpts{
+		OrgID:         req.OrgID,
+		UserID:        req.UserID,
+		TeamID:        req.TeamID,
+		Role:          req.Role,
+		AllowedModels: req.AllowedModels,
+		RPMLimit:      req.RPMLimit,
+		TPMLimit:      req.TPMLimit,
+		MaxBudget:     req.MaxBudget,
+		ExpiresAt:     expiresAt,
+	})
+	if err != nil {
+		writeAdminError(w, r, err)
 		return
 	}
 
@@ -227,8 +235,7 @@ func (s *server) handleGetKey(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	key, err := s.deps.Store.GetKey(r.Context(), id)
 	if err != nil {
-		status := errorStatus(err)
-		writeJSON(w, status, errorResponse(err.Error()))
+		writeAdminError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, key)
@@ -238,8 +245,7 @@ func (s *server) handleUpdateKey(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	existing, err := s.deps.Store.GetKey(r.Context(), id)
 	if err != nil {
-		status := errorStatus(err)
-		writeJSON(w, status, errorResponse(err.Error()))
+		writeAdminError(w, r, err)
 		return
 	}
 
@@ -253,8 +259,7 @@ func (s *server) handleUpdateKey(w http.ResponseWriter, r *http.Request) {
 		ExpiresAt     *string  `json:"expires_at,omitempty"`
 		Blocked       *bool    `json:"blocked,omitempty"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&update); err != nil {
-		writeJSON(w, http.StatusBadRequest, errorResponse("invalid request body"))
+	if !decodeJSON(w, r, &update) {
 		return
 	}
 
@@ -286,7 +291,7 @@ func (s *server) handleUpdateKey(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := s.deps.Store.UpdateKey(r.Context(), existing); err != nil {
-		writeJSON(w, http.StatusInternalServerError, errorResponse("failed to update key"))
+		writeAdminError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, existing)
@@ -295,8 +300,7 @@ func (s *server) handleUpdateKey(w http.ResponseWriter, r *http.Request) {
 func (s *server) handleDeleteKey(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	if err := s.deps.Store.DeleteKey(r.Context(), id); err != nil {
-		status := errorStatus(err)
-		writeJSON(w, status, errorResponse(err.Error()))
+		writeAdminError(w, r, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -322,8 +326,7 @@ func (s *server) handleListRoutes(w http.ResponseWriter, r *http.Request) {
 
 func (s *server) handleCreateRoute(w http.ResponseWriter, r *http.Request) {
 	var route gateway.Route
-	if err := json.NewDecoder(r.Body).Decode(&route); err != nil {
-		writeJSON(w, http.StatusBadRequest, errorResponse("invalid request body"))
+	if !decodeJSON(w, r, &route) {
 		return
 	}
 	if route.ModelAlias == "" {
@@ -337,7 +340,7 @@ func (s *server) handleCreateRoute(w http.ResponseWriter, r *http.Request) {
 		route.Strategy = "priority"
 	}
 	if err := s.deps.Store.CreateRoute(r.Context(), &route); err != nil {
-		writeJSON(w, http.StatusInternalServerError, errorResponse("failed to create route"))
+		writeAdminError(w, r, err)
 		return
 	}
 	w.Header().Set("Location", "/admin/v1/routes/"+route.ID)
@@ -348,8 +351,7 @@ func (s *server) handleGetRoute(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	route, err := s.deps.Store.GetRoute(r.Context(), id)
 	if err != nil {
-		status := errorStatus(err)
-		writeJSON(w, status, errorResponse(err.Error()))
+		writeAdminError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, route)
@@ -358,14 +360,12 @@ func (s *server) handleGetRoute(w http.ResponseWriter, r *http.Request) {
 func (s *server) handleUpdateRoute(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	var route gateway.Route
-	if err := json.NewDecoder(r.Body).Decode(&route); err != nil {
-		writeJSON(w, http.StatusBadRequest, errorResponse("invalid request body"))
+	if !decodeJSON(w, r, &route) {
 		return
 	}
 	route.ID = id
 	if err := s.deps.Store.UpdateRoute(r.Context(), &route); err != nil {
-		status := errorStatus(err)
-		writeJSON(w, status, errorResponse(err.Error()))
+		writeAdminError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, route)
@@ -374,8 +374,7 @@ func (s *server) handleUpdateRoute(w http.ResponseWriter, r *http.Request) {
 func (s *server) handleDeleteRoute(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	if err := s.deps.Store.DeleteRoute(r.Context(), id); err != nil {
-		status := errorStatus(err)
-		writeJSON(w, status, errorResponse(err.Error()))
+		writeAdminError(w, r, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)

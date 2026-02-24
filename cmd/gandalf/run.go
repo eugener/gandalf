@@ -51,7 +51,11 @@ func run(configPath string) error {
 	}
 	defer store.Close()
 
-	slog.Info("database opened", "dsn", cfg.Database.DSN)
+	dsnLog := cfg.Database.DSN
+	if i := strings.IndexByte(dsnLog, '?'); i >= 0 {
+		dsnLog = dsnLog[:i]
+	}
+	slog.Info("database opened", "dsn", dsnLog)
 
 	// Bootstrap from config
 	ctx := context.Background()

@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"net/http"
+	"slices"
 	"time"
 )
 
@@ -116,12 +117,12 @@ type EmbeddingResponse struct {
 
 // Organization represents a top-level tenant.
 type Organization struct {
-	ID            string   `json:"id"`
-	Name          string   `json:"name"`
-	AllowedModels []string `json:"allowed_models,omitempty"` // nil = all models
-	RPMLimit      *int64   `json:"rpm_limit,omitempty"`
-	TPMLimit      *int64   `json:"tpm_limit,omitempty"`
-	MaxBudget     *float64 `json:"max_budget,omitempty"` // USD
+	ID            string    `json:"id"`
+	Name          string    `json:"name"`
+	AllowedModels []string  `json:"allowed_models,omitempty"` // nil = all models
+	RPMLimit      *int64    `json:"rpm_limit,omitempty"`
+	TPMLimit      *int64    `json:"tpm_limit,omitempty"`
+	MaxBudget     *float64  `json:"max_budget,omitempty"` // USD
 	CreatedAt     time.Time `json:"created_at"`
 }
 
@@ -139,8 +140,8 @@ type Team struct {
 // APIKey represents an API key for authentication.
 type APIKey struct {
 	ID            string     `json:"id"`
-	KeyHash       string     `json:"-"`                        // SHA-256 hex, never exposed
-	KeyPrefix     string     `json:"key_prefix"`               // first 8 chars for display
+	KeyHash       string     `json:"-"`          // SHA-256 hex, never exposed
+	KeyPrefix     string     `json:"key_prefix"` // first 8 chars for display
 	UserID        string     `json:"user_id,omitempty"`
 	TeamID        string     `json:"team_id,omitempty"`
 	OrgID         string     `json:"org_id"`
@@ -158,17 +159,18 @@ type APIKey struct {
 // Identity is the authenticated caller context attached to request context.
 // Populated by either JWT or API key auth.
 type Identity struct {
-	Subject    string     `json:"subject"`     // JWT sub or key prefix
-	KeyID      string     `json:"key_id"`      // API key ID for per-key bucketing
-	UserID     string     `json:"user_id"`
-	TeamID     string     `json:"team_id"`
-	OrgID      string     `json:"org_id"`
-	Role       string     `json:"role"`        // "admin", "member", "viewer", "service_account"
-	Perms      Permission `json:"-"`           // resolved bitmask
-	AuthMethod string     `json:"auth_method"` // "jwt" or "apikey"
-	RPMLimit   int64      `json:"-"`           // effective RPM limit (0 = unlimited)
-	TPMLimit   int64      `json:"-"`           // effective TPM limit (0 = unlimited)
-	MaxBudget  float64    `json:"-"`           // max spend USD (0 = unlimited)
+	Subject       string     `json:"subject"` // JWT sub or key prefix
+	KeyID         string     `json:"key_id"`  // API key ID for per-key bucketing
+	UserID        string     `json:"user_id"`
+	TeamID        string     `json:"team_id"`
+	OrgID         string     `json:"org_id"`
+	Role          string     `json:"role"`        // "admin", "member", "viewer", "service_account"
+	Perms         Permission `json:"-"`           // resolved bitmask
+	AuthMethod    string     `json:"auth_method"` // "jwt" or "apikey"
+	RPMLimit      int64      `json:"-"`           // effective RPM limit (0 = unlimited)
+	TPMLimit      int64      `json:"-"`           // effective TPM limit (0 = unlimited)
+	MaxBudget     float64    `json:"-"`           // max spend USD (0 = unlimited)
+	AllowedModels []string   `json:"-"`           // nil = all models allowed
 }
 
 // --- RBAC ---
@@ -190,6 +192,16 @@ const (
 // Can reports whether the identity has the given permission.
 func (id *Identity) Can(p Permission) bool { return id.Perms&p == p }
 
+// IsModelAllowed checks whether model is permitted for this identity.
+// Returns true if AllowedModels is nil/empty (no restriction).
+// Uses linear scan -- typically 0-5 entries, no allocation.
+func (id *Identity) IsModelAllowed(model string) bool {
+	if len(id.AllowedModels) == 0 {
+		return true
+	}
+	return slices.Contains(id.AllowedModels, model)
+}
+
 // RolePermissions maps role names to their permission bitmasks.
 var RolePermissions = map[string]Permission{
 	"admin":           PermUseModels | PermManageOwnKeys | PermViewOwnUsage | PermViewAllUsage | PermManageAllKeys | PermManageProviders | PermManageRoutes | PermManageOrgs,
@@ -205,7 +217,7 @@ type ProviderConfig struct {
 	ID        string   `json:"id"`
 	Name      string   `json:"name"`
 	BaseURL   string   `json:"base_url"`
-	APIKeyEnc string   `json:"-"`           // deprecated: no longer persisted, kept for schema compat
+	APIKeyEnc string   `json:"-"` // deprecated: no longer persisted, kept for schema compat
 	Models    []string `json:"models"`
 	Priority  int      `json:"priority"`
 	Weight    int      `json:"weight"`

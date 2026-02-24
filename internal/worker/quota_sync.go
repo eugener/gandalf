@@ -21,6 +21,9 @@ func NewQuotaSyncWorker(tracker *ratelimit.QuotaTracker, store ratelimit.QuotaSt
 	return &QuotaSyncWorker{tracker: tracker, store: store}
 }
 
+// Name returns the worker identifier.
+func (w *QuotaSyncWorker) Name() string { return "quota_sync" }
+
 // Run performs an initial sync, then periodically syncs quota counters until ctx is cancelled.
 func (w *QuotaSyncWorker) Run(ctx context.Context) error {
 	if err := w.tracker.SyncAll(ctx, w.store); err != nil {

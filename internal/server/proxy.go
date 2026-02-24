@@ -23,8 +23,14 @@ func (s *server) handleChatCompletion(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// TPM rate limit check (after body decode).
+	// Model allowlist check.
 	identity := gateway.IdentityFromContext(r.Context())
+	if identity != nil && !identity.IsModelAllowed(req.Model) {
+		writeJSON(w, http.StatusForbidden, errorResponse("model not allowed"))
+		return
+	}
+
+	// TPM rate limit check (after body decode).
 	estimated := int64(100)
 	if s.deps.TokenCounter != nil {
 		estimated = int64(s.deps.TokenCounter.EstimateRequest(req.Model, req.Messages))
@@ -249,16 +255,15 @@ func errorResponse(msg string) apiError {
 }
 
 // writeUpstreamError logs the full error server-side and returns a sanitized
-// message to the client. For server errors (5xx), a generic message is returned
-// to avoid leaking upstream provider internals (URLs, org IDs, etc.).
+// message to the client. Both 4xx and 5xx responses use generic status text
+// to avoid leaking upstream provider internals (URLs, org IDs, quota details).
 func writeUpstreamError(w http.ResponseWriter, ctx context.Context, err error) {
 	status := errorStatus(err)
-	if status >= http.StatusInternalServerError {
-		slog.LogAttrs(ctx, slog.LevelError, "upstream error", slog.String("error", err.Error()))
-		writeJSON(w, status, errorResponse("upstream provider error"))
-		return
-	}
-	writeJSON(w, status, errorResponse(err.Error()))
+	slog.LogAttrs(ctx, slog.LevelError, "upstream error",
+		slog.Int("status", status),
+		slog.String("error", err.Error()),
+	)
+	writeJSON(w, status, errorResponse(http.StatusText(status)))
 }
 
 func errorStatus(err error) int {

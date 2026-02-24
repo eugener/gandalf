@@ -127,5 +127,8 @@ func buildIdentity(key *gateway.APIKey) *gateway.Identity {
 	if key.MaxBudget != nil {
 		id.MaxBudget = *key.MaxBudget
 	}
+	if len(key.AllowedModels) > 0 {
+		id.AllowedModels = key.AllowedModels
+	}
 	return id
 }

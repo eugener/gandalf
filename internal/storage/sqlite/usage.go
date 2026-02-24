@@ -134,31 +134,43 @@ func usageWhere(f gateway.UsageFilter) (string, []any) {
 	return " WHERE " + strings.Join(clauses, " AND "), args
 }
 
-// UpsertRollup inserts or updates usage rollup records.
+// UpsertRollup inserts or updates usage rollup records in a single transaction
+// with a prepared statement for efficiency.
 func (s *Store) UpsertRollup(ctx context.Context, rollups []gateway.UsageRollup) error {
 	if len(rollups) == 0 {
 		return nil
 	}
+	tx, err := s.write.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback() //nolint:errcheck
+
+	stmt, err := tx.PrepareContext(ctx,
+		`INSERT INTO usage_rollups (org_id, key_id, model, period, bucket,
+		 request_count, prompt_tokens, completion_tokens, total_tokens, cost_usd, cached_count)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		 ON CONFLICT(org_id, key_id, model, period, bucket) DO UPDATE SET
+		 request_count = request_count + excluded.request_count,
+		 prompt_tokens = prompt_tokens + excluded.prompt_tokens,
+		 completion_tokens = completion_tokens + excluded.completion_tokens,
+		 total_tokens = total_tokens + excluded.total_tokens,
+		 cost_usd = cost_usd + excluded.cost_usd,
+		 cached_count = cached_count + excluded.cached_count`)
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+
 	for _, r := range rollups {
-		_, err := s.write.ExecContext(ctx,
-			`INSERT INTO usage_rollups (org_id, key_id, model, period, bucket,
-			 request_count, prompt_tokens, completion_tokens, total_tokens, cost_usd, cached_count)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-			 ON CONFLICT(org_id, key_id, model, period, bucket) DO UPDATE SET
-			 request_count = request_count + excluded.request_count,
-			 prompt_tokens = prompt_tokens + excluded.prompt_tokens,
-			 completion_tokens = completion_tokens + excluded.completion_tokens,
-			 total_tokens = total_tokens + excluded.total_tokens,
-			 cost_usd = cost_usd + excluded.cost_usd,
-			 cached_count = cached_count + excluded.cached_count`,
+		if _, err := stmt.ExecContext(ctx,
 			r.OrgID, r.KeyID, r.Model, r.Period, r.Bucket,
 			r.RequestCount, r.PromptTokens, r.CompletionTokens, r.TotalTokens, r.CostUSD, r.CachedCount,
-		)
-		if err != nil {
+		); err != nil {
 			return err
 		}
 	}
-	return nil
+	return tx.Commit()
 }
 
 // QueryRollups returns rollups matching the filter.

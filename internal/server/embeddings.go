@@ -17,8 +17,14 @@ func (s *server) handleEmbeddings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// TPM rate limit for embeddings (rough estimate).
+	// Model allowlist check.
 	identity := gateway.IdentityFromContext(r.Context())
+	if identity != nil && !identity.IsModelAllowed(req.Model) {
+		writeJSON(w, http.StatusForbidden, errorResponse("model not allowed"))
+		return
+	}
+
+	// TPM rate limit for embeddings (rough estimate).
 	estimated := int64(100)
 	if !s.consumeTPM(w, identity, estimated) {
 		return

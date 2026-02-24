@@ -23,23 +23,10 @@ func NewRunner(workers ...Worker) *Runner {
 func (r *Runner) Run(ctx context.Context) error {
 	g, ctx := errgroup.WithContext(ctx)
 	for _, w := range r.workers {
-		slog.Info("worker started", "type", workerName(w))
+		slog.Info("worker started", "name", w.Name())
 		g.Go(func() error {
 			return w.Run(ctx)
 		})
 	}
 	return g.Wait()
-}
-
-func workerName(w Worker) string {
-	switch w.(type) {
-	case *UsageRecorder:
-		return "usage_recorder"
-	case *QuotaSyncWorker:
-		return "quota_sync"
-	case *UsageRollupWorker:
-		return "usage_rollup"
-	default:
-		return "unknown"
-	}
 }

@@ -212,17 +212,39 @@ func (r *Registry) GetOrCreate(keyID string, limits Limits) *Limiter {
 }
 
 // EvictStale removes limiters not used since cutoff.
+// Phase 1: RLock to snapshot stale keys. Phase 2: Lock to delete them.
+// This reduces write-lock hold time from O(N) limiter locks to O(stale) deletes.
 func (r *Registry) EvictStale(cutoff time.Time) int {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	evicted := 0
+	// Phase 1: read-lock to identify stale keys.
+	r.mu.RLock()
+	var staleKeys []string
 	for k, l := range r.limiters {
 		l.mu.Lock()
 		stale := l.lastUsed.Before(cutoff)
 		l.mu.Unlock()
 		if stale {
-			delete(r.limiters, k)
-			evicted++
+			staleKeys = append(staleKeys, k)
+		}
+	}
+	r.mu.RUnlock()
+
+	if len(staleKeys) == 0 {
+		return 0
+	}
+
+	// Phase 2: write-lock only for deletions.
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	evicted := 0
+	for _, k := range staleKeys {
+		if l, ok := r.limiters[k]; ok {
+			l.mu.Lock()
+			stillStale := l.lastUsed.Before(cutoff)
+			l.mu.Unlock()
+			if stillStale {
+				delete(r.limiters, k)
+				evicted++
+			}
 		}
 	}
 	return evicted

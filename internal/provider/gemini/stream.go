@@ -2,7 +2,6 @@ package gemini
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 
@@ -21,6 +20,7 @@ func readStream(ctx context.Context, body io.ReadCloser, ch chan<- gateway.Strea
 	defer body.Close()
 
 	scanner := sseutil.NewScanner(body)
+	id := "gemini-" + model
 
 	var lastUsage *gateway.Usage
 	for scanner.Scan() {
@@ -46,7 +46,7 @@ func readStream(ctx context.Context, body io.ReadCloser, ch chan<- gateway.Strea
 		}
 
 		if text != "" {
-			chunk := buildDeltaChunk(model, map[string]any{"content": text}, finishReason)
+			chunk := sseutil.BuildDeltaChunk(id, model, map[string]any{"content": text}, finishReason)
 			select {
 			case ch <- gateway.StreamChunk{Data: chunk}:
 			case <-ctx.Done():
@@ -54,7 +54,7 @@ func readStream(ctx context.Context, body io.ReadCloser, ch chan<- gateway.Strea
 				return
 			}
 		} else if finishReason != "" {
-			chunk := buildDeltaChunk(model, map[string]any{}, finishReason)
+			chunk := sseutil.BuildDeltaChunk(id, model, map[string]any{}, finishReason)
 			select {
 			case ch <- gateway.StreamChunk{Data: chunk}:
 			case <-ctx.Done():
@@ -71,45 +71,8 @@ func readStream(ctx context.Context, body io.ReadCloser, ch chan<- gateway.Strea
 
 	// Emit usage chunk at the end (Gemini provides cumulative usage).
 	if lastUsage != nil {
-		usageData := buildUsageChunk(model, lastUsage)
+		usageData := sseutil.BuildUsageChunk(id, model, lastUsage)
 		ch <- gateway.StreamChunk{Data: usageData, Usage: lastUsage}
 	}
 	ch <- gateway.StreamChunk{Done: true}
-}
-
-// buildDeltaChunk builds an OpenAI-format streaming chunk JSON.
-func buildDeltaChunk(model string, delta map[string]any, finishReason string) []byte {
-	var fr any
-	if finishReason != "" {
-		fr = finishReason
-	}
-	chunk := map[string]any{
-		"id":      "gemini-" + model,
-		"object":  "chat.completion.chunk",
-		"model":   model,
-		"choices": []map[string]any{{
-			"index":         0,
-			"delta":         delta,
-			"finish_reason": fr,
-		}},
-	}
-	b, _ := json.Marshal(chunk)
-	return b
-}
-
-// buildUsageChunk builds a chunk with usage statistics.
-func buildUsageChunk(model string, usage *gateway.Usage) []byte {
-	chunk := map[string]any{
-		"id":      "gemini-" + model,
-		"object":  "chat.completion.chunk",
-		"model":   model,
-		"choices": []map[string]any{},
-		"usage": map[string]any{
-			"prompt_tokens":     usage.PromptTokens,
-			"completion_tokens": usage.CompletionTokens,
-			"total_tokens":      usage.TotalTokens,
-		},
-	}
-	b, _ := json.Marshal(chunk)
-	return b
 }

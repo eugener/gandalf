@@ -37,6 +37,9 @@ func NewUsageRecorder(store UsageStore) *UsageRecorder {
 	}
 }
 
+// Name returns the worker identifier.
+func (u *UsageRecorder) Name() string { return "usage_recorder" }
+
 // Record enqueues a usage record. It never blocks; drops on full channel.
 func (u *UsageRecorder) Record(r gateway.UsageRecord) {
 	select {

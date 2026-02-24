@@ -6,12 +6,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"strings"
 
 	"github.com/rs/dnscache"
-	"github.com/tidwall/gjson"
 
 	gateway "github.com/eugener/gandalf/internal"
 	"github.com/eugener/gandalf/internal/provider"
@@ -72,7 +70,7 @@ func (c *Client) ChatCompletion(ctx context.Context, req *gateway.ChatRequest) (
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, parseAPIError(resp)
+		return nil, provider.ParseAPIError(providerName, resp)
 	}
 
 	var out gateway.ChatResponse
@@ -111,51 +109,12 @@ func (c *Client) ChatCompletionStream(ctx context.Context, req *gateway.ChatRequ
 	}
 	if resp.StatusCode != http.StatusOK {
 		defer resp.Body.Close()
-		return nil, parseAPIError(resp)
+		return nil, provider.ParseAPIError(providerName, resp)
 	}
 
 	ch := make(chan gateway.StreamChunk, 8)
-	go c.readSSEStream(ctx, resp, ch)
+	go sseutil.ReadSSEStream(ctx, providerName, resp, ch)
 	return ch, nil
-}
-
-// readSSEStream reads SSE lines from the response body and sends them as
-// StreamChunks. It closes ch when done.
-func (c *Client) readSSEStream(ctx context.Context, resp *http.Response, ch chan<- gateway.StreamChunk) {
-	defer close(ch)
-	defer resp.Body.Close()
-
-	scanner := sseutil.NewScanner(resp.Body)
-	for scanner.Scan() {
-		line := scanner.Text()
-		_, data, ok := sseutil.ParseSSELine(line)
-		if !ok {
-			continue
-		}
-		if data == "[DONE]" {
-			ch <- gateway.StreamChunk{Done: true}
-			return
-		}
-
-		chunk := gateway.StreamChunk{Data: []byte(data)}
-		// Extract usage from final chunk if present.
-		if u := gjson.GetBytes(chunk.Data, "usage"); u.Exists() && u.Type == gjson.JSON {
-			var usage gateway.Usage
-			if json.Unmarshal([]byte(u.Raw), &usage) == nil && usage.TotalTokens > 0 {
-				chunk.Usage = &usage
-			}
-		}
-
-		select {
-		case ch <- chunk:
-		case <-ctx.Done():
-			ch <- gateway.StreamChunk{Err: ctx.Err()}
-			return
-		}
-	}
-	if err := scanner.Err(); err != nil {
-		ch <- gateway.StreamChunk{Err: fmt.Errorf("openai: read stream: %w", err)}
-	}
 }
 
 // Embeddings sends an embedding request to the OpenAI API.
@@ -178,7 +137,7 @@ func (c *Client) Embeddings(ctx context.Context, req *gateway.EmbeddingRequest) 
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, parseAPIError(resp)
+		return nil, provider.ParseAPIError(providerName, resp)
 	}
 
 	var out gateway.EmbeddingResponse
@@ -210,7 +169,7 @@ func (c *Client) ListModels(ctx context.Context) ([]string, error) {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, parseAPIError(resp)
+		return nil, provider.ParseAPIError(providerName, resp)
 	}
 
 	var out listModelsResponse
@@ -243,23 +202,4 @@ func (c *Client) ProxyRequest(ctx context.Context, w http.ResponseWriter, r *htt
 func (c *Client) setHeaders(r *http.Request) {
 	r.Header.Set("Authorization", "Bearer "+c.apiKey)
 	r.Header.Set("Content-Type", "application/json")
-}
-
-// apiError represents an error response from the OpenAI API.
-type apiError struct {
-	StatusCode int
-	Body       string
-}
-
-func (e *apiError) Error() string {
-	return fmt.Sprintf("openai: HTTP %d: %s", e.StatusCode, e.Body)
-}
-
-// HTTPStatus returns the HTTP status code for failover decisions.
-func (e *apiError) HTTPStatus() int { return e.StatusCode }
-
-// parseAPIError reads the response body and returns a structured error.
-func parseAPIError(resp *http.Response) error {
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-	return &apiError{StatusCode: resp.StatusCode, Body: string(body)}
 }

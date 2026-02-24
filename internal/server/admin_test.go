@@ -311,6 +311,7 @@ func newAdminTestHandler(authProvider gateway.Authenticator) (http.Handler, *adm
 		Proxy:     app.NewProxyService(reg, routerSvc),
 		Providers: reg,
 		Router:    routerSvc,
+		Keys:      app.NewKeyManager(store),
 		Store:     store,
 	}), store
 }

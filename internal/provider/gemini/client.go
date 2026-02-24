@@ -74,7 +74,7 @@ func (c *Client) ChatCompletion(ctx context.Context, req *gateway.ChatRequest) (
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, parseAPIError(resp)
+		return nil, provider.ParseAPIError(providerName, resp)
 	}
 
 	respBody, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
@@ -108,7 +108,7 @@ func (c *Client) ChatCompletionStream(ctx context.Context, req *gateway.ChatRequ
 	}
 	if resp.StatusCode != http.StatusOK {
 		defer resp.Body.Close()
-		return nil, parseAPIError(resp)
+		return nil, provider.ParseAPIError(providerName, resp)
 	}
 
 	ch := make(chan gateway.StreamChunk, 8)
@@ -158,7 +158,7 @@ func (c *Client) Embeddings(ctx context.Context, req *gateway.EmbeddingRequest) 
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, parseAPIError(resp)
+		return nil, provider.ParseAPIError(providerName, resp)
 	}
 
 	respBody, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
@@ -199,7 +199,7 @@ func (c *Client) ListModels(ctx context.Context) ([]string, error) {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, parseAPIError(resp)
+		return nil, provider.ParseAPIError(providerName, resp)
 	}
 
 	respBody, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
@@ -235,21 +235,3 @@ func (c *Client) ProxyRequest(ctx context.Context, w http.ResponseWriter, r *htt
 	}, w, r, path)
 }
 
-// apiError represents an error response from the Gemini API.
-type apiError struct {
-	StatusCode int
-	Body       string
-}
-
-func (e *apiError) Error() string {
-	return fmt.Sprintf("gemini: HTTP %d: %s", e.StatusCode, e.Body)
-}
-
-// HTTPStatus returns the HTTP status code for failover decisions.
-func (e *apiError) HTTPStatus() int { return e.StatusCode }
-
-// parseAPIError reads the response body and returns a structured error.
-func parseAPIError(resp *http.Response) error {
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-	return &apiError{StatusCode: resp.StatusCode, Body: string(body)}
-}

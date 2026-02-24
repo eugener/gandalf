@@ -13,6 +13,20 @@ import (
 	gateway "github.com/eugener/gandalf/internal"
 )
 
+// isValidParam checks that s is non-empty and contains only [a-zA-Z0-9._-].
+func isValidParam(s string) bool {
+	if len(s) == 0 || len(s) > maxRequestIDLen {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '.' || c == '_' || c == '-') {
+			return false
+		}
+	}
+	return true
+}
+
 // mountNativeRoutes registers native API passthrough routes on the given router.
 // Each format group uses normalizeAuth to map provider-specific auth headers
 // to Authorization: Bearer before the authenticate middleware runs.
@@ -47,6 +61,9 @@ func (s *server) mountNativeRoutes(r chi.Router) {
 			func(r *http.Request) string {
 				model := chi.URLParam(r, "model")
 				action := chi.URLParam(r, "action")
+				if !isValidParam(model) || !isValidParam(action) {
+					return ""
+				}
 				return "/models/" + model + ":" + action
 			},
 			func(r *http.Request, _ []byte) string {
@@ -68,14 +85,22 @@ func (s *server) mountNativeRoutes(r chi.Router) {
 			"openai",
 			func(_ *http.Request) string { return "/chat/completions" },
 			func(r *http.Request, _ []byte) string {
-				return chi.URLParam(r, "deployment")
+				d := chi.URLParam(r, "deployment")
+				if !isValidParam(d) {
+					return ""
+				}
+				return d
 			},
 		))
 		r.Post("/openai/deployments/{deployment}/embeddings", s.handleNativeProxy(
 			"openai",
 			func(_ *http.Request) string { return "/embeddings" },
 			func(r *http.Request, _ []byte) string {
-				return chi.URLParam(r, "deployment")
+				d := chi.URLParam(r, "deployment")
+				if !isValidParam(d) {
+					return ""
+				}
+				return d
 			},
 		))
 	})
@@ -123,6 +148,13 @@ func (s *server) handleNativeProxy(providerType string,
 			return
 		}
 
+		// Model allowlist check.
+		identity := gateway.IdentityFromContext(r.Context())
+		if identity != nil && !identity.IsModelAllowed(model) {
+			writeJSON(w, http.StatusForbidden, errorResponse("model not allowed"))
+			return
+		}
+
 		// Route model -> provider targets.
 		targets, err := s.deps.Router.ResolveModel(r.Context(), model)
 		if err != nil {
@@ -147,6 +179,10 @@ func (s *server) handleNativeProxy(providerType string,
 			// Reconstruct body and forward.
 			r.Body = io.NopCloser(bytes.NewReader(body))
 			path := pathFunc(r)
+			if path == "" {
+				writeJSON(w, http.StatusBadRequest, errorResponse("invalid path parameters"))
+				return
+			}
 			if proxyErr := np.ProxyRequest(r.Context(), w, r, path); proxyErr != nil {
 				slog.LogAttrs(r.Context(), slog.LevelError, "native proxy error",
 					slog.String("provider", target.ProviderID),

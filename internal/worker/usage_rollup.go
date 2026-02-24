@@ -28,6 +28,9 @@ func NewUsageRollupWorker(store RollupStore) *UsageRollupWorker {
 	return &UsageRollupWorker{store: store}
 }
 
+// Name returns the worker identifier.
+func (w *UsageRollupWorker) Name() string { return "usage_rollup" }
+
 // Run aggregates usage records into hourly rollups on a periodic schedule.
 func (w *UsageRollupWorker) Run(ctx context.Context) error {
 	ticker := time.NewTicker(rollupInterval)

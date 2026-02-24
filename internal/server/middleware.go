@@ -22,12 +22,30 @@ const (
 	hdrRateLimitTokens      = "X-Ratelimit-Limit-Tokens"
 	hdrRemainingTokens      = "X-Ratelimit-Remaining-Tokens"
 	hdrRetryAfter           = "Retry-After"
+	maxRequestIDLen         = 128
+)
+
+// Pre-allocated header value slices for security headers.
+// Direct map assignment avoids the []string{v} alloc that Header.Set creates.
+var (
+	nosniffVal = []string{"nosniff"}
+	denyVal    = []string{"DENY"}
 )
 
 // statusWriterPool eliminates 1 alloc/req from &statusWriter{} escaping to heap.
 // Reset fields on Get, nil ResponseWriter on Put to avoid retaining references.
 var statusWriterPool = sync.Pool{
-	New: func() any { return &statusWriter{} },
+	New: func() any { return &statusWriter{status: http.StatusOK} },
+}
+
+// securityHeaders sets defense-in-depth response headers on every request.
+func (s *server) securityHeaders(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h := w.Header()
+		h["X-Content-Type-Options"] = nosniffVal
+		h["X-Frame-Options"] = denyVal
+		next.ServeHTTP(w, r)
+	})
 }
 
 // recovery catches panics and returns 500.
@@ -54,10 +72,12 @@ func (s *server) recovery(next http.Handler) http.Handler {
 const requestIDHeader = "X-Request-Id"
 
 // requestID adds a UUID v7 request ID to the context and response header.
+// Client-provided IDs are validated: max 128 chars, [a-zA-Z0-9._-] only.
+// Invalid or missing IDs are replaced with a fresh UUID v7.
 func (s *server) requestID(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var id string
-		if vals := r.Header[requestIDHeader]; len(vals) > 0 {
+		if vals := r.Header[requestIDHeader]; len(vals) > 0 && isValidRequestID(vals[0]) {
 			id = vals[0]
 		} else {
 			id = uuid.Must(uuid.NewV7()).String()
@@ -66,6 +86,21 @@ func (s *server) requestID(next http.Handler) http.Handler {
 		ctx := gateway.ContextWithRequestID(r.Context(), id)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
+}
+
+// isValidRequestID checks that s is non-empty, at most maxRequestIDLen chars,
+// and contains only [a-zA-Z0-9._-]. Iterates bytes without allocation.
+func isValidRequestID(s string) bool {
+	if len(s) == 0 || len(s) > maxRequestIDLen {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '.' || c == '_' || c == '-') {
+			return false
+		}
+	}
+	return true
 }
 
 // logging logs each request with method, path, status, and duration.

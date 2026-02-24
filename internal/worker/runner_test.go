@@ -12,6 +12,8 @@ type fakeWorker struct {
 	runFn func(ctx context.Context) error
 }
 
+func (f *fakeWorker) Name() string { return "fake" }
+
 func (f *fakeWorker) Run(ctx context.Context) error {
 	if f.runFn != nil {
 		return f.runFn(ctx)

@@ -22,9 +22,23 @@ func NewKeyManager(store storage.APIKeyStore) *KeyManager {
 	return &KeyManager{store: store}
 }
 
-// CreateKey generates a new API key for the given org, stores its hash,
+// CreateKeyOpts holds all fields for API key creation.
+type CreateKeyOpts struct {
+	OrgID         string
+	UserID        string
+	TeamID        string
+	Name          string
+	Role          string
+	AllowedModels []string
+	RPMLimit      *int64
+	TPMLimit      *int64
+	MaxBudget     *float64
+	ExpiresAt     *time.Time
+}
+
+// CreateKey generates a new API key with the given options, stores its hash,
 // and returns the plaintext (shown once) along with the persisted APIKey record.
-func (km *KeyManager) CreateKey(ctx context.Context, orgID, name, role string) (string, *gateway.APIKey, error) {
+func (km *KeyManager) CreateKey(ctx context.Context, opts CreateKeyOpts) (string, *gateway.APIKey, error) {
 	raw := make([]byte, 32)
 	if _, err := rand.Read(raw); err != nil {
 		return "", nil, err
@@ -32,13 +46,30 @@ func (km *KeyManager) CreateKey(ctx context.Context, orgID, name, role string) (
 
 	plaintext := gateway.APIKeyPrefix + base64.RawURLEncoding.EncodeToString(raw)
 	hash := gateway.HashKey(plaintext)
+	prefix := plaintext
+	if len(prefix) > 12 {
+		prefix = prefix[:12]
+	}
+
+	role := opts.Role
+	if role == "" {
+		role = "member"
+	}
 
 	key := &gateway.APIKey{
-		ID:        uuid.Must(uuid.NewV7()).String(),
-		KeyHash:   hash,
-		KeyPrefix: plaintext[:8],
-		OrgID:     orgID,
-		CreatedAt: time.Now().UTC(),
+		ID:            uuid.Must(uuid.NewV7()).String(),
+		KeyHash:       hash,
+		KeyPrefix:     prefix,
+		OrgID:         opts.OrgID,
+		UserID:        opts.UserID,
+		TeamID:        opts.TeamID,
+		Role:          role,
+		AllowedModels: opts.AllowedModels,
+		RPMLimit:      opts.RPMLimit,
+		TPMLimit:      opts.TPMLimit,
+		MaxBudget:     opts.MaxBudget,
+		ExpiresAt:     opts.ExpiresAt,
+		CreatedAt:     time.Now().UTC(),
 	}
 
 	if err := km.store.CreateKey(ctx, key); err != nil {

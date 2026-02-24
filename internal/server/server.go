@@ -62,6 +62,7 @@ func New(deps Deps) http.Handler {
 	r := chi.NewRouter()
 
 	// Global middleware
+	r.Use(s.securityHeaders)
 	r.Use(s.recovery)
 	r.Use(s.requestID)
 	r.Use(s.logging)
