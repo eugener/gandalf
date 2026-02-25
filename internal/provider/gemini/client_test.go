@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -367,6 +368,103 @@ func TestDirectGenerateURL(t *testing.T) {
 	want := "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent"
 	if got != want {
 		t.Errorf("generateURL =\n  %s\nwant:\n  %s", got, want)
+	}
+}
+
+func TestProxyRequest(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1beta/models/gemini-2.0-flash:generateContent" {
+			t.Errorf("path = %q, want /v1beta/models/gemini-2.0-flash:generateContent", r.URL.Path)
+		}
+		body, _ := io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write(body)
+	}))
+	defer srv.Close()
+
+	client := New("gemini", srv.URL+"/v1beta", nil)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1beta/models/gemini-2.0-flash:generateContent",
+		strings.NewReader(`{"contents":[{"parts":[{"text":"hi"}]}]}`))
+	req.Header.Set("Content-Type", "application/json")
+
+	err := client.ProxyRequest(context.Background(), rec, req, "/models/gemini-2.0-flash:generateContent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rec.Code != http.StatusOK {
+		t.Errorf("status = %d, want 200", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "hi") {
+		t.Errorf("body = %q, want to contain hi", rec.Body.String())
+	}
+}
+
+func TestExtractText_Array(t *testing.T) {
+	t.Parallel()
+
+	input := json.RawMessage(`[{"type":"text","text":"hello"},{"type":"text","text":" world"}]`)
+	got := extractText(input)
+	if got != "hello world" {
+		t.Errorf("extractText array = %q, want 'hello world'", got)
+	}
+}
+
+func TestExtractText_Fallback(t *testing.T) {
+	t.Parallel()
+
+	// Non-string, non-array input falls back to raw string.
+	input := json.RawMessage(`42`)
+	got := extractText(input)
+	if got != "42" {
+		t.Errorf("extractText fallback = %q, want '42'", got)
+	}
+}
+
+func TestTranslateRequest_ToolRole(t *testing.T) {
+	t.Parallel()
+
+	req := &gateway.ChatRequest{
+		Model: "gemini-2.0-flash",
+		Messages: []gateway.Message{
+			{Role: "user", Content: json.RawMessage(`"What's the weather?"`)},
+			{Role: "tool", Content: json.RawMessage(`{"temp":72}`), ToolCallID: "get_weather"},
+		},
+	}
+
+	gReq := translateRequest(req)
+	if len(gReq.Contents) != 2 {
+		t.Fatalf("got %d contents, want 2", len(gReq.Contents))
+	}
+	// Tool result should be mapped to user role with functionResponse.
+	toolContent := gReq.Contents[1]
+	if toolContent.Role != "user" {
+		t.Errorf("tool role = %q, want user", toolContent.Role)
+	}
+	if toolContent.Parts[0].FunctionResponse == nil {
+		t.Error("tool content should have functionResponse part")
+	}
+}
+
+func TestTranslateRequest_WithTools(t *testing.T) {
+	t.Parallel()
+
+	tools := json.RawMessage(`[{"type":"function","function":{"name":"get_weather","parameters":{"type":"object","properties":{"location":{"type":"string"}}}}}]`)
+	req := &gateway.ChatRequest{
+		Model:    "gemini-2.0-flash",
+		Messages: []gateway.Message{{Role: "user", Content: json.RawMessage(`"hi"`)}},
+		Tools:    tools,
+	}
+
+	gReq := translateRequest(req)
+	if len(gReq.Tools) != 1 {
+		t.Fatalf("got %d tools, want 1", len(gReq.Tools))
+	}
+	if gReq.Tools[0].FunctionDeclarations == nil {
+		t.Error("tools should have function declarations")
 	}
 }
 

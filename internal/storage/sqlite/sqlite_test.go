@@ -641,3 +641,97 @@ func TestUsageRollupUpsert(t *testing.T) {
 		t.Errorf("nonexistent rollups = %d, want 0", len(got))
 	}
 }
+
+func TestPing(t *testing.T) {
+	t.Parallel()
+	s := newTestStore(t)
+	if err := s.Ping(context.Background()); err != nil {
+		t.Fatalf("Ping: %v", err)
+	}
+}
+
+func TestRouteGetAndUpdate(t *testing.T) {
+	t.Parallel()
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	r := &gateway.Route{
+		ID:         "route-gu",
+		ModelAlias: "gpt-4o",
+		Targets:    []byte(`[{"provider_id":"p1","model":"gpt-4o","priority":1}]`),
+		Strategy:   "priority",
+		CacheTTLs:  60,
+	}
+	if err := s.CreateRoute(ctx, r); err != nil {
+		t.Fatal("create:", err)
+	}
+
+	// GetRoute by ID.
+	got, err := s.GetRoute(ctx, "route-gu")
+	if err != nil {
+		t.Fatal("GetRoute:", err)
+	}
+	if got.ModelAlias != "gpt-4o" {
+		t.Errorf("alias = %q, want gpt-4o", got.ModelAlias)
+	}
+	if got.Strategy != "priority" {
+		t.Errorf("strategy = %q, want priority", got.Strategy)
+	}
+
+	// UpdateRoute.
+	r.Strategy = "weighted"
+	r.ModelAlias = "gpt-4o-updated"
+	if err := s.UpdateRoute(ctx, r); err != nil {
+		t.Fatal("UpdateRoute:", err)
+	}
+	got, err = s.GetRoute(ctx, "route-gu")
+	if err != nil {
+		t.Fatal("GetRoute after update:", err)
+	}
+	if got.Strategy != "weighted" {
+		t.Errorf("strategy = %q, want weighted", got.Strategy)
+	}
+	if got.ModelAlias != "gpt-4o-updated" {
+		t.Errorf("alias = %q, want gpt-4o-updated", got.ModelAlias)
+	}
+
+	// GetRoute not found.
+	_, err = s.GetRoute(ctx, "nonexistent")
+	if err != gateway.ErrNotFound {
+		t.Errorf("err = %v, want ErrNotFound", err)
+	}
+}
+
+func TestListOrgs(t *testing.T) {
+	t.Parallel()
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	// Create two orgs.
+	for _, o := range []*gateway.Organization{
+		{ID: "org-lo-1", Name: "Org1", CreatedAt: time.Now().UTC()},
+		{ID: "org-lo-2", Name: "Org2", CreatedAt: time.Now().UTC()},
+	} {
+		if err := s.CreateOrg(ctx, o); err != nil {
+			t.Fatal("create:", err)
+		}
+	}
+
+	// "default" org is seeded by migration, so expect 3 total.
+	orgs, err := s.ListOrgs(ctx, 0, 10)
+	if err != nil {
+		t.Fatal("ListOrgs:", err)
+	}
+	if len(orgs) != 3 {
+		t.Fatalf("orgs count = %d, want 3 (default + 2 created)", len(orgs))
+	}
+
+	// Pagination: offset=1, limit=1.
+	orgs, err = s.ListOrgs(ctx, 1, 1)
+	if err != nil {
+		t.Fatal("ListOrgs paginated:", err)
+	}
+	if len(orgs) != 1 {
+		t.Errorf("paginated orgs count = %d, want 1", len(orgs))
+	}
+}

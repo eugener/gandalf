@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	gateway "github.com/eugener/gandalf/internal"
@@ -337,5 +339,59 @@ func TestAzureHealthCheck(t *testing.T) {
 	client := NewWithHosting("azure-openai", srv.URL, &http.Client{}, "azure")
 	if err := client.HealthCheck(context.Background()); err != nil {
 		t.Fatalf("HealthCheck: %v", err)
+	}
+}
+
+func TestProxyRequest(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/chat/completions" {
+			t.Errorf("path = %q, want /v1/chat/completions", r.URL.Path)
+		}
+		body, _ := io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write(body) // echo
+	}))
+	defer srv.Close()
+
+	client := New("openai", srv.URL+"/v1", nil)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions",
+		strings.NewReader(`{"model":"gpt-4o"}`))
+	req.Header.Set("Content-Type", "application/json")
+
+	err := client.ProxyRequest(context.Background(), rec, req, "/chat/completions")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rec.Code != http.StatusOK {
+		t.Errorf("status = %d, want 200", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "gpt-4o") {
+		t.Errorf("body = %q, want to contain gpt-4o", rec.Body.String())
+	}
+}
+
+func TestEmbeddingsHTTPError(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusTooManyRequests)
+		fmt.Fprint(w, `{"error":{"message":"rate limited"}}`)
+	}))
+	defer srv.Close()
+
+	client := testClient("openai", "test-key", srv.URL+"/v1")
+	_, err := client.Embeddings(context.Background(), &gateway.EmbeddingRequest{
+		Model: "text-embedding-3-small",
+		Input: json.RawMessage(`"hello"`),
+	})
+	if err == nil {
+		t.Fatal("expected error for HTTP 429")
+	}
+	if !strings.Contains(err.Error(), "429") {
+		t.Errorf("error = %q, want 429", err)
 	}
 }

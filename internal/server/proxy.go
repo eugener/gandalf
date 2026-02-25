@@ -276,6 +276,8 @@ func errorStatus(err error) int {
 		return http.StatusNotFound
 	case errors.Is(err, gateway.ErrRateLimited):
 		return http.StatusTooManyRequests
+	case errors.Is(err, gateway.ErrConflict):
+		return http.StatusConflict
 	case errors.Is(err, gateway.ErrBadRequest):
 		return http.StatusBadRequest
 	default:

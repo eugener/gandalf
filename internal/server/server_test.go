@@ -711,6 +711,7 @@ func TestErrorStatus_AllBranches(t *testing.T) {
 		{gateway.ErrModelNotAllowed, http.StatusForbidden},
 		{gateway.ErrKeyBlocked, http.StatusForbidden},
 		{gateway.ErrNotFound, http.StatusNotFound},
+		{gateway.ErrConflict, http.StatusConflict},
 		{gateway.ErrRateLimited, http.StatusTooManyRequests},
 		{gateway.ErrBadRequest, http.StatusBadRequest},
 		{errors.New("unknown"), http.StatusInternalServerError},

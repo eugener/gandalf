@@ -207,6 +207,32 @@ func TestContextWithIdentity_IdentityFromContext(t *testing.T) {
 	})
 }
 
+func TestIsModelAllowed(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		allowed []string
+		model   string
+		want    bool
+	}{
+		{name: "nil allowed", allowed: nil, model: "gpt-4o", want: true},
+		{name: "empty allowed", allowed: []string{}, model: "gpt-4o", want: true},
+		{name: "model in list", allowed: []string{"gpt-4o", "gpt-3.5"}, model: "gpt-4o", want: true},
+		{name: "model not in list", allowed: []string{"gpt-4o", "gpt-3.5"}, model: "claude-sonnet-4-6", want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			id := &Identity{AllowedModels: tt.allowed}
+			if got := id.IsModelAllowed(tt.model); got != tt.want {
+				t.Errorf("IsModelAllowed(%q) = %v, want %v", tt.model, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestMetaFromContext(t *testing.T) {
 	t.Parallel()
 

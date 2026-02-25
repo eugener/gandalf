@@ -589,3 +589,195 @@ func TestAdminRouteNotFound(t *testing.T) {
 		t.Errorf("status = %d, want 404", rec.Code)
 	}
 }
+
+func TestAdminRouteUpdate(t *testing.T) {
+	t.Parallel()
+	h, store := newAdminTestHandler(adminAuth{})
+
+	// Create route first.
+	store.mu.Lock()
+	store.routes["route-1"] = &gateway.Route{
+		ID: "route-1", ModelAlias: "gpt-4o",
+		Targets: []byte(`[{"provider_id":"fake","model":"gpt-4o","priority":1}]`),
+		Strategy: "priority",
+	}
+	store.mu.Unlock()
+
+	// Update success.
+	body := `{"model_alias":"gpt-4o-updated","strategy":"weighted"}`
+	req := httptest.NewRequest(http.MethodPut, "/admin/v1/routes/route-1", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer gnd_admin")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("update: status = %d, want 200; body = %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "gpt-4o-updated") {
+		t.Error("response should contain updated alias")
+	}
+
+	// Update not found.
+	req = httptest.NewRequest(http.MethodPut, "/admin/v1/routes/nonexistent", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer gnd_admin")
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("update not found: status = %d, want 404", rec.Code)
+	}
+}
+
+func TestAdminQueryUsage(t *testing.T) {
+	t.Parallel()
+	h, store := newAdminTestHandler(adminAuth{})
+
+	// Insert test usage records.
+	store.mu.Lock()
+	store.usage = []gateway.UsageRecord{
+		{ID: "u1", KeyID: "k1", OrgID: "org1", Model: "gpt-4o", PromptTokens: 10},
+		{ID: "u2", KeyID: "k2", OrgID: "org2", Model: "gpt-3.5", PromptTokens: 5},
+	}
+	store.mu.Unlock()
+
+	// Query with filter.
+	req := httptest.NewRequest(http.MethodGet, "/admin/v1/usage?org_id=org1", nil)
+	req.Header.Set("Authorization", "Bearer gnd_admin")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("usage query: status = %d; body = %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "u1") {
+		t.Error("response should contain u1")
+	}
+	if strings.Contains(rec.Body.String(), "u2") {
+		t.Error("response should not contain u2 (filtered by org)")
+	}
+
+	// Query empty result.
+	req = httptest.NewRequest(http.MethodGet, "/admin/v1/usage?org_id=nonexistent", nil)
+	req.Header.Set("Authorization", "Bearer gnd_admin")
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("empty usage query: status = %d", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), `"data":[]`) {
+		t.Error("empty usage should return empty array")
+	}
+}
+
+func TestAdminUsageSummary(t *testing.T) {
+	t.Parallel()
+	h, store := newAdminTestHandler(adminAuth{})
+
+	// Insert test rollups.
+	store.mu.Lock()
+	store.rollups = []gateway.UsageRollup{
+		{OrgID: "org1", KeyID: "k1", Model: "gpt-4o", Period: "hourly",
+			Bucket: "2024-01-01T00:00:00Z", RequestCount: 10},
+	}
+	store.mu.Unlock()
+
+	req := httptest.NewRequest(http.MethodGet, "/admin/v1/usage/summary?org_id=org1&period=hourly", nil)
+	req.Header.Set("Authorization", "Bearer gnd_admin")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("summary: status = %d; body = %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "gpt-4o") {
+		t.Error("response should contain rollup data")
+	}
+
+	// Empty summary.
+	store.mu.Lock()
+	store.rollups = nil
+	store.mu.Unlock()
+
+	req = httptest.NewRequest(http.MethodGet, "/admin/v1/usage/summary?org_id=empty", nil)
+	req.Header.Set("Authorization", "Bearer gnd_admin")
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("empty summary: status = %d", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), `"data":[]`) {
+		t.Error("empty summary should return empty array")
+	}
+}
+
+func TestAdminCreateKey_InvalidExpiry(t *testing.T) {
+	t.Parallel()
+	h, _ := newAdminTestHandler(adminAuth{})
+
+	body := `{"org_id":"default","expires_at":"not-a-date"}`
+	req := httptest.NewRequest(http.MethodPost, "/admin/v1/keys", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer gnd_admin")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400; body = %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestAdminUpdateKey_InvalidExpiry(t *testing.T) {
+	t.Parallel()
+	h, store := newAdminTestHandler(adminAuth{})
+
+	// Seed a key.
+	store.mu.Lock()
+	store.keys["key-exp"] = &gateway.APIKey{
+		ID: "key-exp", OrgID: "default", Role: "member",
+	}
+	store.mu.Unlock()
+
+	body := `{"expires_at":"bad-format"}`
+	req := httptest.NewRequest(http.MethodPut, "/admin/v1/keys/key-exp", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer gnd_admin")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400; body = %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestAdminConflictError(t *testing.T) {
+	t.Parallel()
+
+	// Use a store that returns ErrConflict on CreateProvider.
+	store := newAdminFakeStore()
+	store.providers["dup"] = &gateway.ProviderConfig{ID: "dup", Name: "dup"}
+
+	// Create a conflicting adminFakeStore that returns conflict.
+	conflictStore := &conflictOnCreateStore{adminFakeStore: store}
+
+	reg := provider.NewRegistry()
+	reg.Register("fake", fakeProvider{})
+	routerSvc := app.NewRouterService(store)
+	h := New(Deps{
+		Auth:      adminAuth{},
+		Proxy:     app.NewProxyService(reg, routerSvc),
+		Providers: reg,
+		Router:    routerSvc,
+		Keys:      app.NewKeyManager(conflictStore),
+		Store:     conflictStore,
+	})
+
+	body := `{"name":"dup","base_url":"https://example.com","enabled":true}`
+	req := httptest.NewRequest(http.MethodPost, "/admin/v1/providers", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer gnd_admin")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusConflict {
+		t.Errorf("status = %d, want 409; body = %s", rec.Code, rec.Body.String())
+	}
+}
+
+// conflictOnCreateStore wraps adminFakeStore and returns ErrConflict on CreateProvider.
+type conflictOnCreateStore struct {
+	*adminFakeStore
+}
+
+func (s *conflictOnCreateStore) CreateProvider(_ context.Context, _ *gateway.ProviderConfig) error {
+	return gateway.ErrConflict
+}

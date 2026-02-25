@@ -160,6 +160,65 @@ func TestForwardRequestUpstreamError(t *testing.T) {
 	}
 }
 
+func TestForwardRequest_NilSetAuth(t *testing.T) {
+	t.Parallel()
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer upstream.Close()
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/test", nil)
+
+	// Pass nil setAuth -- should not panic.
+	err := ForwardRequest(context.Background(), upstream.Client(), upstream.URL, nil, rec, req, "/test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rec.Code != http.StatusOK {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+}
+
+func TestForwardRequest_StripsAllAuthHeaders(t *testing.T) {
+	t.Parallel()
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "" {
+			t.Error("Authorization header should be stripped")
+		}
+		if r.Header.Get("X-Api-Key") != "" {
+			t.Error("X-Api-Key header should be stripped")
+		}
+		if r.Header.Get("X-Goog-Api-Key") != "" {
+			t.Error("X-Goog-Api-Key header should be stripped")
+		}
+		if r.Header.Get("Api-Key") != "" {
+			t.Error("Api-Key header should be stripped")
+		}
+		// Non-auth headers should be preserved.
+		if r.Header.Get("Content-Type") != "application/json" {
+			t.Error("Content-Type should be preserved")
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer upstream.Close()
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/test", strings.NewReader("{}"))
+	req.Header.Set("Authorization", "Bearer secret")
+	req.Header.Set("X-Api-Key", "sk-secret")
+	req.Header.Set("X-Goog-Api-Key", "goog-secret")
+	req.Header.Set("Api-Key", "azure-secret")
+	req.Header.Set("Content-Type", "application/json")
+
+	err := ForwardRequest(context.Background(), upstream.Client(), upstream.URL, nil, rec, req, "/test")
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestForwardRequestStripsHopByHop(t *testing.T) {
 	t.Parallel()
 

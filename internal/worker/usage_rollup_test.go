@@ -102,3 +102,18 @@ func TestUsageRollupWorker(t *testing.T) {
 		t.Errorf("period = %q, want hourly", k1Rollup.Period)
 	}
 }
+
+func TestUsageRollupWorker_RunCancelledContext(t *testing.T) {
+	t.Parallel()
+
+	store := &fakeRollupStore{}
+	w := NewUsageRollupWorker(store)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // cancel immediately
+
+	err := w.Run(ctx)
+	if err != nil {
+		t.Errorf("Run should return nil on cancelled context, got %v", err)
+	}
+}

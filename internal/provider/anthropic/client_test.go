@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -302,5 +303,183 @@ func TestHealthCheckError(t *testing.T) {
 	client := testClient("anthropic", "test-key", srv.URL+"/v1")
 	if err := client.HealthCheck(context.Background()); err == nil {
 		t.Fatal("expected error for unreachable server")
+	}
+}
+
+func TestEmbeddings(t *testing.T) {
+	t.Parallel()
+
+	client := New("anthropic", "", nil)
+	_, err := client.Embeddings(context.Background(), &gateway.EmbeddingRequest{
+		Model: "text-embedding",
+		Input: json.RawMessage(`"hello"`),
+	})
+	if err == nil {
+		t.Fatal("expected error for unsupported operation")
+	}
+	if !strings.Contains(err.Error(), "not supported") {
+		t.Errorf("error = %q, want 'not supported'", err)
+	}
+}
+
+func TestListModels(t *testing.T) {
+	t.Parallel()
+
+	client := New("anthropic", "", nil)
+	models, err := client.ListModels(context.Background())
+	if err != nil {
+		t.Fatalf("ListModels: %v", err)
+	}
+	if len(models) == 0 {
+		t.Fatal("expected non-empty model list")
+	}
+	found := false
+	for _, m := range models {
+		if strings.HasPrefix(m, "claude-") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("models = %v, expected at least one claude model", models)
+	}
+}
+
+func TestProxyRequest(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/messages" {
+			t.Errorf("path = %q, want /v1/messages", r.URL.Path)
+		}
+		// Direct mode should set anthropic-version.
+		if r.Header.Get("anthropic-version") != anthropicVersion {
+			t.Errorf("anthropic-version = %q, want %q", r.Header.Get("anthropic-version"), anthropicVersion)
+		}
+		body, _ := io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write(body)
+	}))
+	defer srv.Close()
+
+	client := New("anthropic", srv.URL+"/v1", nil)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages",
+		strings.NewReader(`{"model":"claude-sonnet-4-6"}`))
+	req.Header.Set("Content-Type", "application/json")
+
+	err := client.ProxyRequest(context.Background(), rec, req, "/messages")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rec.Code != http.StatusOK {
+		t.Errorf("status = %d, want 200", rec.Code)
+	}
+}
+
+func TestProxyRequestVertex(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Vertex mode should NOT set anthropic-version header.
+		if r.Header.Get("anthropic-version") != "" {
+			t.Error("vertex mode should not set anthropic-version header")
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"ok":true}`))
+	}))
+	defer srv.Close()
+
+	client := NewWithHosting("vertex-claude", srv.URL+"/v1", nil,
+		"vertex", "us-central1", "proj")
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages",
+		strings.NewReader(`{"model":"claude-sonnet-4-6"}`))
+	req.Header.Set("Content-Type", "application/json")
+
+	err := client.ProxyRequest(context.Background(), rec, req, "/messages")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rec.Code != http.StatusOK {
+		t.Errorf("status = %d, want 200", rec.Code)
+	}
+}
+
+func TestChatCompletionHTTPError(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(529) // Anthropic overloaded
+		fmt.Fprint(w, `{"type":"error","error":{"type":"overloaded_error","message":"overloaded"}}`)
+	}))
+	defer srv.Close()
+
+	client := testClient("anthropic", "test-key", srv.URL+"/v1")
+	_, err := client.ChatCompletion(context.Background(), &gateway.ChatRequest{
+		Model:    "claude-sonnet-4-6",
+		Messages: []gateway.Message{{Role: "user", Content: json.RawMessage(`"hi"`)}},
+	})
+	if err == nil {
+		t.Fatal("expected error for HTTP 529")
+	}
+	if !strings.Contains(err.Error(), "529") {
+		t.Errorf("error = %q, want 529", err)
+	}
+}
+
+func TestChatCompletionStreamToolUse(t *testing.T) {
+	t.Parallel()
+
+	sseBody := "event: message_start\n" +
+		`data: {"type":"message_start","message":{"id":"msg_02","model":"claude-sonnet-4-6","usage":{"input_tokens":20}}}` + "\n\n" +
+		"event: content_block_delta\n" +
+		`data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"key\":"}}` + "\n\n" +
+		"event: content_block_delta\n" +
+		`data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"\"val\"}"}}` + "\n\n" +
+		"event: message_delta\n" +
+		`data: {"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":10}}` + "\n\n" +
+		"event: message_stop\n" +
+		`data: {"type":"message_stop"}` + "\n\n"
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, sseBody)
+	}))
+	defer srv.Close()
+
+	client := testClient("anthropic", "test-key", srv.URL+"/v1")
+	ch, err := client.ChatCompletionStream(context.Background(), &gateway.ChatRequest{
+		Model:    "claude-sonnet-4-6",
+		Messages: []gateway.Message{{Role: "user", Content: json.RawMessage(`"use tool"`)}},
+	})
+	if err != nil {
+		t.Fatalf("ChatCompletionStream: %v", err)
+	}
+
+	var chunks []gateway.StreamChunk
+	for c := range ch {
+		chunks = append(chunks, c)
+	}
+
+	if len(chunks) < 4 {
+		t.Fatalf("got %d chunks, want at least 4", len(chunks))
+	}
+
+	// Last chunk should be Done.
+	if !chunks[len(chunks)-1].Done {
+		t.Error("last chunk should be Done")
+	}
+
+	// Second-to-last should have usage.
+	usageChunk := chunks[len(chunks)-2]
+	if usageChunk.Usage == nil {
+		t.Fatal("expected usage chunk")
+	}
+	if usageChunk.Usage.TotalTokens != 30 {
+		t.Errorf("total_tokens = %d, want 30", usageChunk.Usage.TotalTokens)
 	}
 }

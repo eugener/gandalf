@@ -388,6 +388,74 @@ func TestNativeMissingModel(t *testing.T) {
 	}
 }
 
+func TestNativeProxyList_NoProvider(t *testing.T) {
+	t.Parallel()
+
+	// No providers registered at all.
+	h := newNativeTestHandler(
+		map[string]*fakeNativeProvider{},
+		map[string]string{},
+	)
+
+	req := httptest.NewRequest(http.MethodGet, "/v1beta/models", nil)
+	req.Header.Set("X-Goog-Api-Key", "gnd_test_key")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadGateway {
+		t.Errorf("status = %d, want 502; body = %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestNativeProxy_ModelNotAllowed(t *testing.T) {
+	t.Parallel()
+
+	fp := &fakeNativeProvider{name: "anthropic"}
+	reg := provider.NewRegistry()
+	reg.Register("anthropic", fp)
+	routerSvc := app.NewRouterService(&fakeNativeRouteStore{
+		routes: map[string]string{"claude-sonnet-4-6": "anthropic"},
+	})
+
+	// Auth that returns identity with restricted AllowedModels.
+	restrictedAuth := restrictedModelAuth{allowed: []string{"gpt-4o"}}
+
+	h := New(Deps{
+		Auth:      restrictedAuth,
+		Proxy:     app.NewProxyService(reg, routerSvc),
+		Providers: reg,
+		Router:    routerSvc,
+	})
+
+	body := `{"model":"claude-sonnet-4-6","max_tokens":100,"messages":[{"role":"user","content":"hello"}]}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Api-Key", "gnd_test_key")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("status = %d, want 403; body = %s", rec.Code, rec.Body.String())
+	}
+}
+
+// restrictedModelAuth returns an identity with a restricted AllowedModels list.
+type restrictedModelAuth struct {
+	allowed []string
+}
+
+func (a restrictedModelAuth) Authenticate(_ context.Context, _ *http.Request) (*gateway.Identity, error) {
+	return &gateway.Identity{
+		Subject:       "test",
+		KeyID:         "key-test-1",
+		OrgID:         "default",
+		Role:          "admin",
+		Perms:         gateway.RolePermissions["admin"],
+		AuthMethod:    "apikey",
+		AllowedModels: a.allowed,
+	}, nil
+}
+
 func TestNormalizeAuthMiddleware(t *testing.T) {
 	t.Parallel()
 

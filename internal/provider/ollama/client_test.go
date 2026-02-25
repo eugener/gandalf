@@ -233,6 +233,36 @@ func TestProxyRequest(t *testing.T) {
 	}
 }
 
+func TestHealthCheck(t *testing.T) {
+	t.Parallel()
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/tags" {
+			t.Errorf("path = %q, want /api/tags", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, `{"models":[{"name":"llama3"}]}`)
+	}))
+	defer ts.Close()
+
+	c := New("ollama", ts.URL, nil)
+	if err := c.HealthCheck(context.Background()); err != nil {
+		t.Fatalf("HealthCheck: %v", err)
+	}
+}
+
+func TestHealthCheckError(t *testing.T) {
+	t.Parallel()
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {}))
+	ts.Close() // close immediately
+
+	c := New("ollama", ts.URL, nil)
+	if err := c.HealthCheck(context.Background()); err == nil {
+		t.Fatal("expected error for unreachable server")
+	}
+}
+
 func TestName(t *testing.T) {
 	t.Parallel()
 	c := New("ollama", "", nil)
