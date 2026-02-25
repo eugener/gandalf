@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/collectors"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -102,20 +103,20 @@ func run(configPath string) error {
 		var prov gateway.Provider
 		switch p.ResolvedType() {
 		case "openai":
-			if p.ResolvedHosting() == "azure" {
-				prov = openai.NewWithHosting(p.Name, p.BaseURL, client, p.Hosting)
+			if h := p.ResolvedHosting(); h == "azure" {
+				prov = openai.NewWithHosting(p.Name, p.BaseURL, client, h)
 			} else {
 				prov = openai.New(p.Name, p.BaseURL, client)
 			}
 		case "anthropic":
-			if p.ResolvedHosting() == "vertex" {
-				prov = anthropic.NewWithHosting(p.Name, p.BaseURL, client, p.Hosting, p.Region, p.Project)
+			if h := p.ResolvedHosting(); h == "vertex" || h == "bedrock" {
+				prov = anthropic.NewWithHosting(p.Name, p.BaseURL, client, h, p.Region, p.Project)
 			} else {
 				prov = anthropic.New(p.Name, p.BaseURL, client)
 			}
 		case "gemini":
-			if p.ResolvedHosting() == "vertex" {
-				prov = gemini.NewWithHosting(p.Name, p.BaseURL, client, p.Hosting, p.Region, p.Project)
+			if h := p.ResolvedHosting(); h == "vertex" {
+				prov = gemini.NewWithHosting(p.Name, p.BaseURL, client, h, p.Region, p.Project)
 			} else {
 				prov = gemini.New(p.Name, p.BaseURL, client)
 			}
@@ -358,6 +359,12 @@ func buildProviderClient(ctx context.Context, p config.ProviderEntry, resolver *
 			return nil, fmt.Errorf("gcp oauth: %w", err)
 		}
 		transport = gcpTransport
+	case "aws_sigv4":
+		awsCfg, err := awsconfig.LoadDefaultConfig(ctx, awsconfig.WithRegion(p.Region))
+		if err != nil {
+			return nil, fmt.Errorf("aws credentials: %w", err)
+		}
+		transport = cloudauth.NewAWSSigV4Transport(base, awsCfg.Credentials, p.Region, "bedrock-runtime")
 	case "api_key":
 		apiKey := p.ResolvedAPIKey()
 		if apiKey != "" {

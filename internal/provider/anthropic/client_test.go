@@ -408,6 +408,99 @@ func TestProxyRequestVertex(t *testing.T) {
 	}
 }
 
+func TestBedrockURLs(t *testing.T) {
+	t.Parallel()
+
+	c := NewWithHosting("bedrock-claude", "https://bedrock-runtime.us-east-1.amazonaws.com",
+		&http.Client{}, "bedrock", "us-east-1", "")
+	model := "anthropic.claude-3-5-sonnet-20241022-v2:0"
+
+	tests := []struct {
+		name string
+		got  string
+		want string
+	}{
+		{"messagesURL", c.messagesURL(model),
+			"https://bedrock-runtime.us-east-1.amazonaws.com/model/anthropic.claude-3-5-sonnet-20241022-v2:0/invoke"},
+		{"streamingURL", c.streamingURL(model),
+			"https://bedrock-runtime.us-east-1.amazonaws.com/model/anthropic.claude-3-5-sonnet-20241022-v2:0/invoke-with-response-stream"},
+		{"healthURL", c.healthURL(),
+			"https://bedrock-runtime.us-east-1.amazonaws.com"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if tt.got != tt.want {
+				t.Errorf("got %s, want %s", tt.got, tt.want)
+			}
+		})
+	}
+}
+
+func TestBedrockMarshalForHosting(t *testing.T) {
+	t.Parallel()
+
+	c := NewWithHosting("bedrock-claude", "https://example.com",
+		&http.Client{}, "bedrock", "us-east-1", "")
+
+	aReq := &anthropicRequest{
+		Model:     "anthropic.claude-3-5-sonnet",
+		MaxTokens: 1024,
+		Messages:  []anthropicMsg{{Role: "user", Content: json.RawMessage(`"hi"`)}},
+	}
+
+	body, err := c.marshalForHosting(aReq)
+	if err != nil {
+		t.Fatalf("marshalForHosting: %v", err)
+	}
+
+	bodyStr := string(body)
+	// Should have bedrock-specific anthropic_version.
+	if !strings.Contains(bodyStr, `"anthropic_version":"bedrock-2023-05-31"`) {
+		t.Error("body should contain bedrock anthropic_version")
+	}
+	// Should NOT have model field in body.
+	if strings.Contains(bodyStr, `"model"`) {
+		t.Error("body should not contain model field for Bedrock")
+	}
+}
+
+func TestBedrockSetHeadersSkipsVersion(t *testing.T) {
+	t.Parallel()
+
+	c := NewWithHosting("bedrock-claude", "https://example.com",
+		&http.Client{}, "bedrock", "us-east-1", "")
+
+	req, _ := http.NewRequest(http.MethodPost, "https://example.com", nil)
+	c.setHeaders(req)
+
+	if req.Header.Get("anthropic-version") != "" {
+		t.Error("Bedrock mode should not set anthropic-version header")
+	}
+	if req.Header.Get("content-type") != "application/json" {
+		t.Error("should set content-type")
+	}
+}
+
+func TestBedrockProxyRequestReturns501(t *testing.T) {
+	t.Parallel()
+
+	c := NewWithHosting("bedrock-claude", "https://example.com",
+		&http.Client{}, "bedrock", "us-east-1", "")
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages",
+		strings.NewReader(`{"model":"claude"}`))
+
+	err := c.ProxyRequest(context.Background(), rec, req, "/messages")
+	if err == nil {
+		t.Fatal("expected error for bedrock proxy")
+	}
+	if rec.Code != http.StatusNotImplemented {
+		t.Errorf("status = %d, want 501", rec.Code)
+	}
+}
+
 func TestChatCompletionHTTPError(t *testing.T) {
 	t.Parallel()
 

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"github.com/tidwall/gjson"
@@ -267,9 +268,9 @@ func (c *Client) ProxyRequest(ctx context.Context, w http.ResponseWriter, r *htt
 func (c *Client) generateURL(model, action string) string {
 	if c.hosting == "vertex" {
 		return fmt.Sprintf("%s/v1/projects/%s/locations/%s/publishers/google/models/%s:%s",
-			c.baseURL, c.project, c.region, model, action)
+			c.baseURL, c.project, c.region, url.PathEscape(model), action)
 	}
-	return fmt.Sprintf("%s/models/%s:%s", c.baseURL, model, action)
+	return fmt.Sprintf("%s/models/%s:%s", c.baseURL, url.PathEscape(model), action)
 }
 
 // modelsURL returns the models listing endpoint URL.

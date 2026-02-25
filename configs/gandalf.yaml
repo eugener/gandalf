@@ -92,6 +92,19 @@ providers:
   #   priority: 7
   #   enabled: false
 
+  # AWS Bedrock: SigV4 via default credential chain
+  # - name: bedrock-claude
+  #   type: anthropic
+  #   hosting: bedrock
+  #   region: us-east-1
+  #   base_url: "https://bedrock-runtime.us-east-1.amazonaws.com"
+  #   auth:
+  #     type: aws_sigv4
+  #   models:
+  #     - anthropic.claude-3-5-sonnet-20241022-v2:0
+  #   priority: 8
+  #   enabled: false
+
 routes:
   - model_alias: gpt-4o
     targets:

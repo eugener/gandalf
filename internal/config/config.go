@@ -84,15 +84,15 @@ type ProviderEntry struct {
 	Enabled   *bool      `yaml:"enabled"`
 	MaxRPS    int        `yaml:"max_rps"`
 	TimeoutMs int        `yaml:"timeout_ms"`
-	Hosting   string     `yaml:"hosting"` // "", "azure", "vertex"
-	Region    string     `yaml:"region"`  // GCP region for Vertex AI
+	Hosting   string     `yaml:"hosting"` // "", "azure", "vertex", "bedrock"
+	Region    string     `yaml:"region"`  // cloud region (Vertex AI, Bedrock)
 	Project   string     `yaml:"project"` // GCP project ID for Vertex AI
 	Auth      *AuthEntry `yaml:"auth"`    // explicit auth; inferred from api_key when absent
 }
 
 // AuthEntry configures provider authentication.
 type AuthEntry struct {
-	Type   string `yaml:"type"`    // "api_key", "gcp_oauth"
+	Type   string `yaml:"type"`    // "api_key", "gcp_oauth", "aws_sigv4"
 	APIKey string `yaml:"api_key"` // explicit key (overrides top-level api_key)
 }
 
@@ -109,21 +109,25 @@ func (p ProviderEntry) ResolvedType() string {
 	return p.Name
 }
 
-// ResolvedHosting returns the normalized hosting mode ("", "azure", "vertex").
+// ResolvedHosting returns the normalized hosting mode ("", "azure", "vertex", "bedrock").
 func (p ProviderEntry) ResolvedHosting() string {
 	return p.Hosting
 }
 
 // ResolvedAuthType returns the auth type, inferring from context when Auth is nil.
-// Returns "gcp_oauth" for Vertex hosting, "api_key" otherwise.
+// Returns "gcp_oauth" for Vertex hosting, "aws_sigv4" for Bedrock, "api_key" otherwise.
 func (p ProviderEntry) ResolvedAuthType() string {
 	if p.Auth != nil && p.Auth.Type != "" {
 		return p.Auth.Type
 	}
-	if p.Hosting == "vertex" {
+	switch p.Hosting {
+	case "vertex":
 		return "gcp_oauth"
+	case "bedrock":
+		return "aws_sigv4"
+	default:
+		return "api_key"
 	}
-	return "api_key"
 }
 
 // ResolvedAPIKey returns the API key, preferring Auth.APIKey over top-level APIKey.

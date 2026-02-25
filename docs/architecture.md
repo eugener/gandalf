@@ -53,7 +53,9 @@ gandalf/
         client.go                  # Anthropic adapter: ChatCompletion, Stream, ListModels, ProxyRequest + dnscache
         translate.go               # OpenAI <-> Anthropic request/response translation
         stream.go                  # SSE event state machine (message_start, content_block_delta, etc.)
-        client_test.go             # Translation, streaming state machine tests
+        eventstream.go             # AWS Bedrock binary event stream reader (base64-wrapped Anthropic events)
+        client_test.go             # Translation, streaming state machine, Bedrock URL/marshal tests
+        eventstream_test.go        # Bedrock event stream decoder tests
       gemini/
         client.go                  # Gemini adapter: ChatCompletion, Stream, Embeddings, ListModels, ProxyRequest + dnscache
         translate.go               # OpenAI <-> Gemini request/response translation
@@ -164,6 +166,7 @@ type Store interface {
 - Channel-based: `ChatCompletionStream` returns `<-chan StreamChunk` (buffer size 8)
 - OpenAI: raw `data:` JSON passthrough, no parsing on hot path
 - Anthropic: SSE event state machine translates to OpenAI-format chunks
+- Anthropic (Bedrock): AWS binary event stream protocol -- each frame contains base64-wrapped Anthropic event JSON, decoded and fed to the same `streamState` machine
 - Gemini: EOF-terminated SSE, cumulative usage, translates to OpenAI-format chunks
 - Handler: select on chunk channel, 15s keep-alive ticker, context cancellation
 - `statusWriter` implements `http.Flusher` for SSE through middleware

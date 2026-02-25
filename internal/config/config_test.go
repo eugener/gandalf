@@ -132,6 +132,11 @@ providers:
     project: proj-2
     auth:
       type: gcp_oauth
+  - name: bedrock-claude
+    type: anthropic
+    hosting: bedrock
+    region: us-east-1
+    base_url: https://bedrock-runtime.us-east-1.amazonaws.com
 `
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test.yaml")
@@ -144,8 +149,8 @@ providers:
 		t.Fatal(err)
 	}
 
-	if len(cfg.Providers) != 3 {
-		t.Fatalf("providers = %d, want 3", len(cfg.Providers))
+	if len(cfg.Providers) != 4 {
+		t.Fatalf("providers = %d, want 4", len(cfg.Providers))
 	}
 
 	// Azure OpenAI
@@ -183,6 +188,18 @@ providers:
 	if va.Region != "europe-west1" {
 		t.Errorf("vertex-anthropic region = %q", va.Region)
 	}
+
+	// Bedrock Anthropic
+	br := cfg.Providers[3]
+	if br.ResolvedHosting() != "bedrock" {
+		t.Errorf("bedrock hosting = %q", br.ResolvedHosting())
+	}
+	if br.ResolvedAuthType() != "aws_sigv4" {
+		t.Errorf("bedrock auth type = %q, want aws_sigv4", br.ResolvedAuthType())
+	}
+	if br.Region != "us-east-1" {
+		t.Errorf("bedrock region = %q", br.Region)
+	}
 }
 
 func TestProviderEntryResolvedAuthType(t *testing.T) {
@@ -195,6 +212,7 @@ func TestProviderEntryResolvedAuthType(t *testing.T) {
 	}{
 		{"no auth, no hosting", ProviderEntry{APIKey: "key"}, "api_key"},
 		{"vertex infers gcp_oauth", ProviderEntry{Hosting: "vertex"}, "gcp_oauth"},
+		{"bedrock infers aws_sigv4", ProviderEntry{Hosting: "bedrock"}, "aws_sigv4"},
 		{"explicit overrides inference", ProviderEntry{Hosting: "vertex", Auth: &AuthEntry{Type: "api_key"}}, "api_key"},
 		{"explicit gcp_oauth", ProviderEntry{Auth: &AuthEntry{Type: "gcp_oauth"}}, "gcp_oauth"},
 	}
