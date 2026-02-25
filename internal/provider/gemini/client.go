@@ -223,14 +223,24 @@ func (c *Client) ListModels(ctx context.Context) ([]string, error) {
 	}
 
 	var ids []string
-	gjson.ParseBytes(respBody).Get("models").ForEach(func(_, model gjson.Result) bool {
+	parsed := gjson.ParseBytes(respBody)
+
+	// Vertex AI uses "publisherModels" key; direct API uses "models".
+	modelsKey := "models"
+	if c.hosting == "vertex" {
+		modelsKey = "publisherModels"
+	}
+
+	parsed.Get(modelsKey).ForEach(func(_, model gjson.Result) bool {
 		name := model.Get("name").String()
-		// Strip "models/" prefix.
-		if after, ok := strings.CutPrefix(name, "models/"); ok {
-			ids = append(ids, after)
-		} else {
-			ids = append(ids, name)
+		// Strip common prefixes (direct: "models/", Vertex: "publishers/google/models/").
+		for _, prefix := range []string{"publishers/google/models/", "models/"} {
+			if after, ok := strings.CutPrefix(name, prefix); ok {
+				name = after
+				break
+			}
 		}
+		ids = append(ids, name)
 		return true
 	})
 	return ids, nil

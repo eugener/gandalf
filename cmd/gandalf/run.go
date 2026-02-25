@@ -370,7 +370,11 @@ func buildProviderClient(ctx context.Context, p config.ProviderEntry, resolver *
 		return nil, fmt.Errorf("unsupported auth type: %q", p.ResolvedAuthType())
 	}
 
-	return &http.Client{Transport: transport}, nil
+	client := &http.Client{Transport: transport}
+	if p.TimeoutMs > 0 {
+		client.Timeout = time.Duration(p.TimeoutMs) * time.Millisecond
+	}
+	return client, nil
 }
 
 // authHeaderForType returns the (headerName, prefix) for API key auth

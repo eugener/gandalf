@@ -353,3 +353,29 @@ func TestDirectGenerateURL(t *testing.T) {
 		t.Errorf("generateURL =\n  %s\nwant:\n  %s", got, want)
 	}
 }
+
+func TestVertexListModels(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Verify Vertex publisher models path.
+		if !strings.Contains(r.URL.Path, "/publishers/google/models") {
+			t.Errorf("path = %s, want publishers/google/models", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"publisherModels":[{"name":"publishers/google/models/gemini-2.0-flash"},{"name":"publishers/google/models/gemini-1.5-pro"}]}`)
+	}))
+	defer srv.Close()
+
+	c := NewWithHosting("vertex-gemini", srv.URL, &http.Client{}, "vertex", "us-central1", "my-project")
+	models, err := c.ListModels(context.Background())
+	if err != nil {
+		t.Fatalf("ListModels: %v", err)
+	}
+	if len(models) != 2 {
+		t.Fatalf("got %d models, want 2", len(models))
+	}
+	if models[0] != "gemini-2.0-flash" {
+		t.Errorf("models[0] = %q, want gemini-2.0-flash", models[0])
+	}
+}
