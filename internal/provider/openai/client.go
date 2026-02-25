@@ -29,9 +29,10 @@ type Client struct {
 	name    string
 	baseURL string
 	http    *http.Client
+	hosting string // "", "azure"
 }
 
-// New creates an OpenAI Client.
+// New creates an OpenAI Client for direct API access.
 // name is the instance identifier; baseURL configures the upstream.
 // If baseURL is empty, it defaults to "https://api.openai.com/v1".
 // The provided client should have auth configured via its transport chain.
@@ -47,6 +48,14 @@ func New(name, baseURL string, client *http.Client) *Client {
 		baseURL: strings.TrimRight(baseURL, "/"),
 		http:    client,
 	}
+}
+
+// NewWithHosting creates an OpenAI Client for a specific hosting platform.
+// For hosting="azure", ListModels returns the deployment model from the base URL.
+func NewWithHosting(name, baseURL string, client *http.Client, hosting string) *Client {
+	c := New(name, baseURL, client)
+	c.hosting = hosting
+	return c
 }
 
 // Name returns the instance identifier.
@@ -160,7 +169,14 @@ type listModelsResponse struct {
 }
 
 // ListModels returns the IDs of all models available from the OpenAI API.
+// For Azure hosting, the models endpoint is not available at the deployment URL,
+// so this returns a nil slice with no error.
 func (c *Client) ListModels(ctx context.Context) ([]string, error) {
+	if c.hosting == "azure" {
+		// Azure deployment URLs don't support GET /models.
+		return nil, nil
+	}
+
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/models", nil)
 	if err != nil {
 		return nil, fmt.Errorf("openai: create request: %w", err)
@@ -189,8 +205,23 @@ func (c *Client) ListModels(ctx context.Context) ([]string, error) {
 	return ids, nil
 }
 
-// HealthCheck verifies connectivity by listing models.
+// HealthCheck verifies connectivity. For Azure, sends a lightweight POST
+// to check reachability since the models endpoint is not available.
 func (c *Client) HealthCheck(ctx context.Context) error {
+	if c.hosting == "azure" {
+		// Azure deployments don't have a GET /models endpoint.
+		// Verify connectivity with a HEAD request to the base URL.
+		httpReq, err := http.NewRequestWithContext(ctx, http.MethodHead, c.baseURL, nil)
+		if err != nil {
+			return fmt.Errorf("openai: create health check request: %w", err)
+		}
+		resp, err := c.http.Do(httpReq)
+		if err != nil {
+			return fmt.Errorf("openai: health check: %w", err)
+		}
+		resp.Body.Close()
+		return nil
+	}
 	_, err := c.ListModels(ctx)
 	return err
 }

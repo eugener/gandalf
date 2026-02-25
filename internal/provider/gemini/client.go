@@ -143,9 +143,10 @@ func (c *Client) Embeddings(ctx context.Context, req *gateway.EmbeddingRequest) 
 		if err := json.Unmarshal(req.Input, &inputs); err != nil {
 			return nil, fmt.Errorf("gemini: unsupported input format: %w", err)
 		}
-		if len(inputs) > 0 {
-			inputText = inputs[0]
+		if len(inputs) != 1 {
+			return nil, fmt.Errorf("gemini: batch embeddings not supported, provide a single string input")
 		}
+		inputText = inputs[0]
 	}
 
 	gReq := map[string]any{
@@ -185,6 +186,9 @@ func (c *Client) Embeddings(ctx context.Context, req *gateway.EmbeddingRequest) 
 	// Convert Gemini embedding response to OpenAI format.
 	r := gjson.ParseBytes(respBody)
 	embValues := r.Get("embedding.values").Raw
+	if embValues == "" {
+		return nil, fmt.Errorf("gemini: empty embedding values in response")
+	}
 
 	embData, _ := json.Marshal([]map[string]any{{
 		"object":    "embedding",

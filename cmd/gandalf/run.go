@@ -102,7 +102,11 @@ func run(configPath string) error {
 		var prov gateway.Provider
 		switch p.ResolvedType() {
 		case "openai":
-			prov = openai.New(p.Name, p.BaseURL, client)
+			if p.ResolvedHosting() == "azure" {
+				prov = openai.NewWithHosting(p.Name, p.BaseURL, client, p.Hosting)
+			} else {
+				prov = openai.New(p.Name, p.BaseURL, client)
+			}
 		case "anthropic":
 			if p.ResolvedHosting() == "vertex" {
 				prov = anthropic.NewWithHosting(p.Name, p.BaseURL, client, p.Hosting, p.Region, p.Project)

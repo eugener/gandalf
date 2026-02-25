@@ -200,7 +200,7 @@ func TestEmbeddings(t *testing.T) {
 	}
 }
 
-func TestEmbeddingsArrayInput(t *testing.T) {
+func TestEmbeddingsSingleArrayInput(t *testing.T) {
 	t.Parallel()
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -212,13 +212,29 @@ func TestEmbeddingsArrayInput(t *testing.T) {
 	client := testClient("gemini", "test-key", srv.URL+"/v1beta")
 	resp, err := client.Embeddings(context.Background(), &gateway.EmbeddingRequest{
 		Model: "text-embedding-004",
-		Input: json.RawMessage(`["hello","world"]`),
+		Input: json.RawMessage(`["hello"]`),
 	})
 	if err != nil {
 		t.Fatalf("Embeddings: %v", err)
 	}
 	if resp.Object != "list" {
 		t.Errorf("object = %q, want list", resp.Object)
+	}
+}
+
+func TestEmbeddingsBatchRejected(t *testing.T) {
+	t.Parallel()
+
+	client := New("gemini", "", nil)
+	_, err := client.Embeddings(context.Background(), &gateway.EmbeddingRequest{
+		Model: "text-embedding-004",
+		Input: json.RawMessage(`["hello","world"]`),
+	})
+	if err == nil {
+		t.Fatal("expected error for batch input")
+	}
+	if !strings.Contains(err.Error(), "batch") {
+		t.Errorf("error = %q, want to mention batch", err)
 	}
 }
 

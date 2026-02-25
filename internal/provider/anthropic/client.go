@@ -153,11 +153,21 @@ func (c *Client) ListModels(_ context.Context) ([]string, error) {
 	}, nil
 }
 
-// HealthCheck verifies connectivity to the Anthropic API.
+// HealthCheck verifies connectivity to the Anthropic API by issuing a
+// HEAD request to the messages endpoint. Anthropic has no public models
+// endpoint, so ListModels returns a static list without network I/O.
 func (c *Client) HealthCheck(ctx context.Context) error {
-	// Use a minimal messages request to check connectivity.
-	_, err := c.ListModels(ctx)
-	return err
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodHead, c.messagesURL(""), nil)
+	if err != nil {
+		return fmt.Errorf("anthropic: health check: %w", err)
+	}
+	c.setHeaders(httpReq)
+	resp, err := c.http.Do(httpReq)
+	if err != nil {
+		return fmt.Errorf("anthropic: health check: %w", err)
+	}
+	resp.Body.Close()
+	return nil
 }
 
 // ProxyRequest forwards a raw HTTP request to the Anthropic API.

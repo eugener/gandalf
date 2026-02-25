@@ -309,3 +309,33 @@ func TestEmbeddings(t *testing.T) {
 		t.Error("expected usage with prompt_tokens=5")
 	}
 }
+
+func TestAzureListModelsReturnsNil(t *testing.T) {
+	t.Parallel()
+
+	client := NewWithHosting("azure-openai", "https://myinstance.openai.azure.com/openai/deployments/gpt-4o", nil, "azure")
+	models, err := client.ListModels(context.Background())
+	if err != nil {
+		t.Fatalf("ListModels: %v", err)
+	}
+	if models != nil {
+		t.Errorf("expected nil models for Azure, got %v", models)
+	}
+}
+
+func TestAzureHealthCheck(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodHead {
+			t.Errorf("method = %s, want HEAD", r.Method)
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	client := NewWithHosting("azure-openai", srv.URL, &http.Client{}, "azure")
+	if err := client.HealthCheck(context.Background()); err != nil {
+		t.Fatalf("HealthCheck: %v", err)
+	}
+}

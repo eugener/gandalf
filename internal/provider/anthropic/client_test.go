@@ -274,3 +274,33 @@ func TestDirectModeSetHeaders(t *testing.T) {
 		t.Error("direct mode should set anthropic-version header")
 	}
 }
+
+func TestHealthCheck(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodHead {
+			t.Errorf("method = %s, want HEAD", r.Method)
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	client := testClient("anthropic", "test-key", srv.URL+"/v1")
+	if err := client.HealthCheck(context.Background()); err != nil {
+		t.Fatalf("HealthCheck: %v", err)
+	}
+}
+
+func TestHealthCheckError(t *testing.T) {
+	t.Parallel()
+
+	// Use a closed server to get a connection error.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {}))
+	srv.Close()
+
+	client := testClient("anthropic", "test-key", srv.URL+"/v1")
+	if err := client.HealthCheck(context.Background()); err == nil {
+		t.Fatal("expected error for unreachable server")
+	}
+}
