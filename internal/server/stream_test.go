@@ -138,7 +138,7 @@ func TestStreamClientDisconnect(t *testing.T) {
 	routerSvc := app.NewRouterService(store)
 	h := New(Deps{
 		Auth:  testutil.FakeAuth{},
-		Proxy: app.NewProxyService(reg, routerSvc),
+		Proxy: app.NewProxyService(reg, routerSvc, nil),
 	})
 
 	body := `{"model":"test-model","messages":[{"role":"user","content":"hi"}],"stream":true}`
@@ -198,7 +198,7 @@ func TestStreamProviderFailover(t *testing.T) {
 	routerSvc := app.NewRouterService(store)
 	h := New(Deps{
 		Auth:  testutil.FakeAuth{},
-		Proxy: app.NewProxyService(reg, routerSvc),
+		Proxy: app.NewProxyService(reg, routerSvc, nil),
 	})
 
 	body := `{"model":"model-a","messages":[{"role":"user","content":"hi"}],"stream":true}`
@@ -231,7 +231,7 @@ func buildHandler(t *testing.T, providerName, modelAlias string, p gateway.Provi
 	routerSvc := app.NewRouterService(store)
 	return New(Deps{
 		Auth:  testutil.FakeAuth{},
-		Proxy: app.NewProxyService(reg, routerSvc),
+		Proxy: app.NewProxyService(reg, routerSvc, nil),
 	})
 }
 

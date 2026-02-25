@@ -1,27 +1,43 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"log/slog"
 	"net/http"
+	"sync"
 	"time"
 
 	gateway "github.com/eugener/gandalf/internal"
 	"github.com/eugener/gandalf/internal/ratelimit"
 )
 
+// bodyPool reuses buffers for request body reads, avoiding per-request
+// allocations from json.NewDecoder (which cannot be pooled/reset).
+var bodyPool = sync.Pool{New: func() any { return new(bytes.Buffer) }}
+
 // maxRequestBody is the maximum allowed request body size (4 MB).
 const maxRequestBody = 4 << 20
 
 func (s *server) handleChatCompletion(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, maxRequestBody)
-	var req gateway.ChatRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	buf := bodyPool.Get().(*bytes.Buffer)
+	buf.Reset()
+	_, err := buf.ReadFrom(r.Body)
+	if err != nil {
+		bodyPool.Put(buf)
 		writeJSON(w, http.StatusBadRequest, errorResponse("invalid request body: "+err.Error()))
 		return
 	}
+	var req gateway.ChatRequest
+	if err := json.Unmarshal(buf.Bytes(), &req); err != nil {
+		bodyPool.Put(buf)
+		writeJSON(w, http.StatusBadRequest, errorResponse("invalid request body: "+err.Error()))
+		return
+	}
+	bodyPool.Put(buf)
 
 	// Model allowlist check.
 	identity := gateway.IdentityFromContext(r.Context())
@@ -101,11 +117,55 @@ func (s *server) handleChatCompletionStream(w http.ResponseWriter, r *http.Reque
 	}
 	flusher.Flush()
 
-	keepAlive := time.NewTicker(15 * time.Second)
-	defer keepAlive.Stop()
+	// Lazy ticker: avoid allocating time.NewTicker for fast-completing streams
+	// (saves ~3 allocs/op on short responses and benchmarks).
+	var keepAlive *time.Ticker
+	defer func() {
+		if keepAlive != nil {
+			keepAlive.Stop()
+		}
+	}()
 
 	var usage *gateway.Usage
 	for {
+		// Fast path: drain channel without ticker select when possible.
+		if keepAlive == nil {
+			select {
+			case chunk, ok := <-ch:
+				if !ok {
+					writeSSEDone(w)
+					flusher.Flush()
+					s.finishStream(r, req, identity, estimated, usage, start)
+					return
+				}
+				if chunk.Err != nil {
+					slog.LogAttrs(r.Context(), slog.LevelError, "stream error",
+						slog.String("error", chunk.Err.Error()),
+					)
+					writeSSEDone(w)
+					flusher.Flush()
+					s.finishStream(r, req, identity, estimated, usage, start)
+					return
+				}
+				if chunk.Usage != nil {
+					usage = chunk.Usage
+				}
+				if chunk.Done {
+					writeSSEDone(w)
+					flusher.Flush()
+					s.finishStream(r, req, identity, estimated, usage, start)
+					return
+				}
+				writeSSEData(w, chunk.Data)
+				flusher.Flush()
+				// First data chunk sent; start keep-alive for long streams.
+				keepAlive = time.NewTicker(15 * time.Second)
+			case <-r.Context().Done():
+				return
+			}
+			continue
+		}
+
 		select {
 		case chunk, ok := <-ch:
 			if !ok {

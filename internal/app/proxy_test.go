@@ -24,7 +24,7 @@ func TestChatCompletion_PrimarySucceeds(t *testing.T) {
 		Strategy:   "priority",
 	})
 
-	ps := NewProxyService(reg, NewRouterService(store))
+	ps := NewProxyService(reg, NewRouterService(store), nil)
 	resp, err := ps.ChatCompletion(context.Background(), &gateway.ChatRequest{Model: "gpt-4o"})
 	if err != nil {
 		t.Fatalf("ChatCompletion: %v", err)
@@ -59,7 +59,7 @@ func TestChatCompletion_FailoverToSecondary(t *testing.T) {
 		Strategy:   "priority",
 	})
 
-	ps := NewProxyService(reg, NewRouterService(store))
+	ps := NewProxyService(reg, NewRouterService(store), nil)
 	resp, err := ps.ChatCompletion(context.Background(), &gateway.ChatRequest{Model: "model-a"})
 	if err != nil {
 		t.Fatalf("ChatCompletion: %v", err)
@@ -91,7 +91,7 @@ func TestChatCompletion_ClientErrorNoFailover(t *testing.T) {
 		Strategy:   "priority",
 	})
 
-	ps := NewProxyService(reg, NewRouterService(store))
+	ps := NewProxyService(reg, NewRouterService(store), nil)
 	_, err := ps.ChatCompletion(context.Background(), &gateway.ChatRequest{Model: "model-a"})
 	if !errors.Is(err, gateway.ErrBadRequest) {
 		t.Fatalf("expected ErrBadRequest, got: %v", err)
@@ -123,7 +123,7 @@ func TestChatCompletion_AllFail(t *testing.T) {
 		Strategy:   "priority",
 	})
 
-	ps := NewProxyService(reg, NewRouterService(store))
+	ps := NewProxyService(reg, NewRouterService(store), nil)
 	_, err := ps.ChatCompletion(context.Background(), &gateway.ChatRequest{Model: "model-a"})
 	if err == nil {
 		t.Fatal("expected error when all providers fail")
@@ -154,7 +154,7 @@ func TestChatCompletionStream_PrimarySucceeds(t *testing.T) {
 		Strategy:   "priority",
 	})
 
-	ps := NewProxyService(reg, NewRouterService(store))
+	ps := NewProxyService(reg, NewRouterService(store), nil)
 	ch, err := ps.ChatCompletionStream(context.Background(), &gateway.ChatRequest{Model: "gpt-4o"})
 	if err != nil {
 		t.Fatalf("ChatCompletionStream: %v", err)
@@ -190,7 +190,7 @@ func TestChatCompletionStream_FailoverToSecondary(t *testing.T) {
 		Strategy:   "priority",
 	})
 
-	ps := NewProxyService(reg, NewRouterService(store))
+	ps := NewProxyService(reg, NewRouterService(store), nil)
 	ch, err := ps.ChatCompletionStream(context.Background(), &gateway.ChatRequest{Model: "model-a"})
 	if err != nil {
 		t.Fatalf("ChatCompletionStream: %v", err)
@@ -221,7 +221,7 @@ func TestChatCompletionStream_ClientErrorNoFailover(t *testing.T) {
 		Strategy:   "priority",
 	})
 
-	ps := NewProxyService(reg, NewRouterService(store))
+	ps := NewProxyService(reg, NewRouterService(store), nil)
 	_, err := ps.ChatCompletionStream(context.Background(), &gateway.ChatRequest{Model: "model-a"})
 	if !errors.Is(err, gateway.ErrBadRequest) {
 		t.Fatalf("expected ErrBadRequest, got: %v", err)
@@ -253,7 +253,7 @@ func TestChatCompletionStream_AllFail(t *testing.T) {
 		Strategy:   "priority",
 	})
 
-	ps := NewProxyService(reg, NewRouterService(store))
+	ps := NewProxyService(reg, NewRouterService(store), nil)
 	_, err := ps.ChatCompletionStream(context.Background(), &gateway.ChatRequest{Model: "model-a"})
 	if err == nil {
 		t.Fatal("expected error when all providers fail")
@@ -284,7 +284,7 @@ func TestEmbeddings_PrimarySucceeds(t *testing.T) {
 		Strategy:   "priority",
 	})
 
-	ps := NewProxyService(reg, NewRouterService(store))
+	ps := NewProxyService(reg, NewRouterService(store), nil)
 	resp, err := ps.Embeddings(context.Background(), &gateway.EmbeddingRequest{Model: "text-embed"})
 	if err != nil {
 		t.Fatalf("Embeddings: %v", err)
@@ -319,7 +319,7 @@ func TestEmbeddings_FailoverToSecondary(t *testing.T) {
 		Strategy:   "priority",
 	})
 
-	ps := NewProxyService(reg, NewRouterService(store))
+	ps := NewProxyService(reg, NewRouterService(store), nil)
 	resp, err := ps.Embeddings(context.Background(), &gateway.EmbeddingRequest{Model: "text-embed"})
 	if err != nil {
 		t.Fatalf("Embeddings: %v", err)
@@ -349,7 +349,7 @@ func TestEmbeddings_ClientErrorNoFailover(t *testing.T) {
 		Strategy:   "priority",
 	})
 
-	ps := NewProxyService(reg, NewRouterService(store))
+	ps := NewProxyService(reg, NewRouterService(store), nil)
 	_, err := ps.Embeddings(context.Background(), &gateway.EmbeddingRequest{Model: "text-embed"})
 	if !errors.Is(err, gateway.ErrBadRequest) {
 		t.Fatalf("expected ErrBadRequest, got: %v", err)
@@ -381,7 +381,7 @@ func TestEmbeddings_AllFail(t *testing.T) {
 		Strategy:   "priority",
 	})
 
-	ps := NewProxyService(reg, NewRouterService(store))
+	ps := NewProxyService(reg, NewRouterService(store), nil)
 	_, err := ps.Embeddings(context.Background(), &gateway.EmbeddingRequest{Model: "text-embed"})
 	if err == nil {
 		t.Fatal("expected error when all providers fail")
@@ -410,7 +410,7 @@ func TestListModels_AggregatesAllProviders(t *testing.T) {
 		},
 	})
 
-	ps := NewProxyService(reg, NewRouterService(testutil.NewFakeStore()))
+	ps := NewProxyService(reg, NewRouterService(testutil.NewFakeStore()), nil)
 	models, err := ps.ListModels(context.Background())
 	if err != nil {
 		t.Fatalf("ListModels: %v", err)
@@ -443,7 +443,7 @@ func TestListModels_SkipsFailingProvider(t *testing.T) {
 		},
 	})
 
-	ps := NewProxyService(reg, NewRouterService(testutil.NewFakeStore()))
+	ps := NewProxyService(reg, NewRouterService(testutil.NewFakeStore()), nil)
 	models, err := ps.ListModels(context.Background())
 	if err != nil {
 		t.Fatalf("ListModels: %v", err)

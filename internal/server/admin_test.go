@@ -308,7 +308,7 @@ func newAdminTestHandler(authProvider gateway.Authenticator) (http.Handler, *adm
 	routerSvc := app.NewRouterService(store)
 	return New(Deps{
 		Auth:      authProvider,
-		Proxy:     app.NewProxyService(reg, routerSvc),
+		Proxy:     app.NewProxyService(reg, routerSvc, nil),
 		Providers: reg,
 		Router:    routerSvc,
 		Keys:      app.NewKeyManager(store),
@@ -756,7 +756,7 @@ func TestAdminConflictError(t *testing.T) {
 	routerSvc := app.NewRouterService(store)
 	h := New(Deps{
 		Auth:      adminAuth{},
-		Proxy:     app.NewProxyService(reg, routerSvc),
+		Proxy:     app.NewProxyService(reg, routerSvc, nil),
 		Providers: reg,
 		Router:    routerSvc,
 		Keys:      app.NewKeyManager(conflictStore),

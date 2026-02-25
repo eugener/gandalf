@@ -150,6 +150,43 @@ func run(configPath string) error {
 		"shutdown", cfg.Server.ShutdownTimeout,
 	)
 
+	// Prometheus metrics.
+	var metrics *telemetry.Metrics
+	var metricsHandler http.Handler
+	if cfg.Telemetry.Metrics.Enabled {
+		promRegistry := prometheus.NewRegistry()
+		promRegistry.MustRegister(collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
+		promRegistry.MustRegister(collectors.NewGoCollector())
+		metrics = telemetry.NewMetrics(promRegistry)
+		metricsHandler = promhttp.HandlerFor(promRegistry, promhttp.HandlerOpts{})
+		slog.Info("prometheus metrics enabled")
+	}
+
+	// OpenTelemetry tracing.
+	var tracer trace.Tracer
+	var tracingShutdown func(context.Context) error
+	if cfg.Telemetry.Tracing.Enabled {
+		endpoint := cfg.Telemetry.Tracing.Endpoint
+		if endpoint == "" {
+			endpoint = "localhost:4317"
+		}
+		sampleRate := cfg.Telemetry.Tracing.SampleRate
+		if sampleRate == 0 {
+			sampleRate = 0.1
+		}
+		shutdown, err := telemetry.SetupTracing(ctx, endpoint, sampleRate)
+		if err != nil {
+			slog.Warn("tracing setup failed, continuing without tracing", "error", err)
+		} else {
+			tracingShutdown = shutdown
+			tracer = telemetry.Tracer("gandalf/server")
+			slog.Info("opentelemetry tracing enabled",
+				"endpoint", endpoint,
+				"sample_rate", sampleRate,
+			)
+		}
+	}
+
 	// Wire services
 	apiKeyAuth, err := auth.NewAPIKeyAuth(store)
 	if err != nil {
@@ -157,7 +194,7 @@ func run(configPath string) error {
 	}
 
 	routerSvc := app.NewRouterService(store)
-	proxySvc := app.NewProxyService(reg, routerSvc)
+	proxySvc := app.NewProxyService(reg, routerSvc, tracer)
 	keys := app.NewKeyManager(store)
 
 	// Usage recorder (async batch flush to DB).
@@ -196,43 +233,6 @@ func run(configPath string) error {
 	workers = append(workers, worker.NewUsageRollupWorker(store))
 
 	runner := worker.NewRunner(workers...)
-
-	// Prometheus metrics.
-	var metrics *telemetry.Metrics
-	var metricsHandler http.Handler
-	if cfg.Telemetry.Metrics.Enabled {
-		promRegistry := prometheus.NewRegistry()
-		promRegistry.MustRegister(collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
-		promRegistry.MustRegister(collectors.NewGoCollector())
-		metrics = telemetry.NewMetrics(promRegistry)
-		metricsHandler = promhttp.HandlerFor(promRegistry, promhttp.HandlerOpts{})
-		slog.Info("prometheus metrics enabled")
-	}
-
-	// OpenTelemetry tracing.
-	var tracer trace.Tracer
-	var tracingShutdown func(context.Context) error
-	if cfg.Telemetry.Tracing.Enabled {
-		endpoint := cfg.Telemetry.Tracing.Endpoint
-		if endpoint == "" {
-			endpoint = "localhost:4317"
-		}
-		sampleRate := cfg.Telemetry.Tracing.SampleRate
-		if sampleRate == 0 {
-			sampleRate = 0.1
-		}
-		shutdown, err := telemetry.SetupTracing(ctx, endpoint, sampleRate)
-		if err != nil {
-			slog.Warn("tracing setup failed, continuing without tracing", "error", err)
-		} else {
-			tracingShutdown = shutdown
-			tracer = telemetry.Tracer("gandalf/server")
-			slog.Info("opentelemetry tracing enabled",
-				"endpoint", endpoint,
-				"sample_rate", sampleRate,
-			)
-		}
-	}
 
 	// Create HTTP server
 	handler := server.New(server.Deps{

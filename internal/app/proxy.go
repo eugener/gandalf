@@ -7,15 +7,12 @@ import (
 	"log/slog"
 	"net/http"
 
-	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
 
 	gateway "github.com/eugener/gandalf/internal"
 	"github.com/eugener/gandalf/internal/provider"
 )
-
-var proxyTracer = otel.Tracer("gandalf/proxy")
 
 // ProxyService forwards chat completion requests to the appropriate LLM provider
 // based on model routing configuration. It supports priority failover: on
@@ -24,11 +21,13 @@ var proxyTracer = otel.Tracer("gandalf/proxy")
 type ProxyService struct {
 	providers *provider.Registry
 	router    *RouterService
+	tracer    trace.Tracer // nil disables tracing (saves ~3.7 allocs/op)
 }
 
 // NewProxyService returns a ProxyService wired to the given provider registry and router.
-func NewProxyService(providers *provider.Registry, router *RouterService) *ProxyService {
-	return &ProxyService{providers: providers, router: router}
+// Pass a nil tracer to disable tracing (avoids span/attribute allocations on hot paths).
+func NewProxyService(providers *provider.Registry, router *RouterService, tracer trace.Tracer) *ProxyService {
+	return &ProxyService{providers: providers, router: router, tracer: tracer}
 }
 
 // ChatCompletion resolves the requested model to providers via routing rules
@@ -47,17 +46,24 @@ func (ps *ProxyService) ChatCompletion(ctx context.Context, req *gateway.ChatReq
 			continue
 		}
 
-		outReq := *req
-		outReq.Model = target.Model
+		origModel := req.Model
+		req.Model = target.Model
 
-		callCtx, span := proxyTracer.Start(ctx, "provider.ChatCompletion",
-			trace.WithAttributes(
-				attribute.String("provider", target.ProviderID),
-				attribute.String("model", target.Model),
-			),
-		)
-		resp, err := p.ChatCompletion(callCtx, &outReq)
-		span.End()
+		callCtx := ctx
+		var span trace.Span
+		if ps.tracer != nil {
+			callCtx, span = ps.tracer.Start(ctx, "provider.ChatCompletion",
+				trace.WithAttributes(
+					attribute.String("provider", target.ProviderID),
+					attribute.String("model", target.Model),
+				),
+			)
+		}
+		resp, err := p.ChatCompletion(callCtx, req)
+		if span != nil {
+			span.End()
+		}
+		req.Model = origModel
 
 		if err != nil {
 			if isClientError(err) {
@@ -91,9 +97,10 @@ func (ps *ProxyService) ChatCompletionStream(ctx context.Context, req *gateway.C
 			continue
 		}
 
-		outReq := *req
-		outReq.Model = target.Model
-		ch, err := p.ChatCompletionStream(ctx, &outReq)
+		origModel := req.Model
+		req.Model = target.Model
+		ch, err := p.ChatCompletionStream(ctx, req)
+		req.Model = origModel
 		if err != nil {
 			if isClientError(err) {
 				return nil, err
@@ -126,9 +133,10 @@ func (ps *ProxyService) Embeddings(ctx context.Context, req *gateway.EmbeddingRe
 			continue
 		}
 
-		outReq := *req
-		outReq.Model = target.Model
-		resp, err := p.Embeddings(ctx, &outReq)
+		origModel := req.Model
+		req.Model = target.Model
+		resp, err := p.Embeddings(ctx, req)
+		req.Model = origModel
 		if err != nil {
 			if isClientError(err) {
 				return nil, err

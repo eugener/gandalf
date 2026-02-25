@@ -26,7 +26,7 @@ func TestMetricsEndpoint(t *testing.T) {
 
 	h := New(Deps{
 		Auth:           fakeAuth{},
-		Proxy:          app.NewProxyService(provReg, routerSvc),
+		Proxy:          app.NewProxyService(provReg, routerSvc, nil),
 		Providers:      provReg,
 		Router:         routerSvc,
 		Metrics:        metrics,
@@ -71,7 +71,7 @@ func TestMetricsMiddleware_IncrementsCounters(t *testing.T) {
 
 	h := New(Deps{
 		Auth:           fakeAuth{},
-		Proxy:          app.NewProxyService(provReg, routerSvc),
+		Proxy:          app.NewProxyService(provReg, routerSvc, nil),
 		Providers:      provReg,
 		Router:         routerSvc,
 		Metrics:        metrics,

@@ -76,7 +76,7 @@ func newNativeTestHandler(providers map[string]*fakeNativeProvider, routes map[s
 	routerSvc := app.NewRouterService(&fakeNativeRouteStore{routes: routes})
 	return New(Deps{
 		Auth:      fakeAuth{},
-		Proxy:     app.NewProxyService(reg, routerSvc),
+		Proxy:     app.NewProxyService(reg, routerSvc, nil),
 		Providers: reg,
 		Router:    routerSvc,
 	})
@@ -422,7 +422,7 @@ func TestNativeProxy_ModelNotAllowed(t *testing.T) {
 
 	h := New(Deps{
 		Auth:      restrictedAuth,
-		Proxy:     app.NewProxyService(reg, routerSvc),
+		Proxy:     app.NewProxyService(reg, routerSvc, nil),
 		Providers: reg,
 		Router:    routerSvc,
 	})

@@ -76,7 +76,7 @@ func newTestHandler() http.Handler {
 	routerSvc := app.NewRouterService(&fakeRouteStore{})
 	return New(Deps{
 		Auth:      fakeAuth{},
-		Proxy:     app.NewProxyService(reg, routerSvc),
+		Proxy:     app.NewProxyService(reg, routerSvc, nil),
 		Providers: reg,
 		Router:    routerSvc,
 	})
@@ -145,7 +145,7 @@ func TestChatCompletionNoAuth(t *testing.T) {
 	routerSvc := app.NewRouterService(&fakeRouteStore{})
 	h := New(Deps{
 		Auth:  rejectAuth{},
-		Proxy: app.NewProxyService(reg, routerSvc),
+		Proxy: app.NewProxyService(reg, routerSvc, nil),
 	})
 
 	body := `{"model":"gpt-4o","messages":[{"role":"user","content":"hello"}]}`
@@ -187,7 +187,7 @@ func TestReadyzFailing(t *testing.T) {
 	routerSvc := app.NewRouterService(&fakeRouteStore{})
 	h := New(Deps{
 		Auth:  fakeAuth{},
-		Proxy: app.NewProxyService(reg, routerSvc),
+		Proxy: app.NewProxyService(reg, routerSvc, nil),
 		ReadyCheck: func(context.Context) error {
 			return errors.New("db down")
 		},
@@ -308,7 +308,7 @@ func TestRateLimit_RPMAllowed(t *testing.T) {
 
 	h := New(Deps{
 		Auth:        rateLimitAuth{rpm: 10},
-		Proxy:       app.NewProxyService(reg, routerSvc),
+		Proxy:       app.NewProxyService(reg, routerSvc, nil),
 		Providers:   reg,
 		Router:      routerSvc,
 		RateLimiter: rl,
@@ -338,7 +338,7 @@ func TestRateLimit_RPMDenied(t *testing.T) {
 
 	h := New(Deps{
 		Auth:        rateLimitAuth{rpm: 1},
-		Proxy:       app.NewProxyService(reg, routerSvc),
+		Proxy:       app.NewProxyService(reg, routerSvc, nil),
 		Providers:   reg,
 		Router:      routerSvc,
 		RateLimiter: rl,
@@ -383,7 +383,7 @@ func TestUsageRecording(t *testing.T) {
 
 	h := New(Deps{
 		Auth:      fakeAuth{},
-		Proxy:     app.NewProxyService(reg, routerSvc),
+		Proxy:     app.NewProxyService(reg, routerSvc, nil),
 		Providers: reg,
 		Router:    routerSvc,
 		Usage:     usage,
@@ -421,7 +421,7 @@ func newTestHandlerWith(fn func(*Deps)) http.Handler {
 	routerSvc := app.NewRouterService(&fakeRouteStore{})
 	deps := Deps{
 		Auth:      fakeAuth{},
-		Proxy:     app.NewProxyService(reg, routerSvc),
+		Proxy:     app.NewProxyService(reg, routerSvc, nil),
 		Providers: reg,
 		Router:    routerSvc,
 	}
@@ -436,7 +436,7 @@ func TestRateLimit_TPMDenied(t *testing.T) {
 	rl := ratelimit.NewRegistry()
 	h := New(Deps{
 		Auth:         rateLimitAuth{rpm: 1000, tpm: 1},
-		Proxy:        app.NewProxyService(provider.NewRegistry(), app.NewRouterService(&fakeRouteStore{})),
+		Proxy:        app.NewProxyService(provider.NewRegistry(), app.NewRouterService(&fakeRouteStore{}), nil),
 		RateLimiter:  rl,
 		TokenCounter: tokencount.NewCounter(),
 	})
@@ -468,7 +468,7 @@ func TestRateLimit_QuotaExceeded(t *testing.T) {
 		Auth: func() gateway.Authenticator {
 			return quotaAuth{maxBudget: 10}
 		}(),
-		Proxy:     app.NewProxyService(reg, routerSvc),
+		Proxy:     app.NewProxyService(reg, routerSvc, nil),
 		Providers: reg,
 		Router:    routerSvc,
 		Quota:     qt,
@@ -622,7 +622,7 @@ func TestEmbeddingsTPMDenied(t *testing.T) {
 
 	h := New(Deps{
 		Auth:        rateLimitAuth{rpm: 1000, tpm: 1},
-		Proxy:       app.NewProxyService(reg, routerSvc),
+		Proxy:       app.NewProxyService(reg, routerSvc, nil),
 		Providers:   reg,
 		Router:      routerSvc,
 		RateLimiter: rl,
@@ -651,7 +651,7 @@ func TestUsageRecordingWithQuota(t *testing.T) {
 	routerSvc := app.NewRouterService(&fakeRouteStore{})
 	h := New(Deps{
 		Auth:  quotaAuth{maxBudget: 100},
-		Proxy: app.NewProxyService(reg, routerSvc),
+		Proxy: app.NewProxyService(reg, routerSvc, nil),
 		Providers: reg,
 		Router:    routerSvc,
 		Usage:     usage,
@@ -739,7 +739,7 @@ func TestStreamWithUsageChunk(t *testing.T) {
 
 	h := New(Deps{
 		Auth:        rateLimitAuth{rpm: 100, tpm: 100000},
-		Proxy:       app.NewProxyService(reg, routerSvc),
+		Proxy:       app.NewProxyService(reg, routerSvc, nil),
 		Providers:   reg,
 		Router:      routerSvc,
 		Usage:       usage,
@@ -789,7 +789,7 @@ func TestTokenCounterIntegration(t *testing.T) {
 	routerSvc := app.NewRouterService(&fakeRouteStore{})
 	h := New(Deps{
 		Auth:         rateLimitAuth{rpm: 100, tpm: 100000},
-		Proxy:        app.NewProxyService(reg, routerSvc),
+		Proxy:        app.NewProxyService(reg, routerSvc, nil),
 		Providers:    reg,
 		Router:       routerSvc,
 		Usage:        usage,
