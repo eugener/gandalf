@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/rs/dnscache"
 	"github.com/tidwall/gjson"
 
 	gateway "github.com/eugener/gandalf/internal"
@@ -29,25 +28,39 @@ var (
 // Client is a Gemini provider adapter that implements gateway.Provider.
 type Client struct {
 	name    string
-	apiKey  string
 	baseURL string
 	http    *http.Client
+	hosting string // "", "vertex"
+	region  string // GCP region for Vertex
+	project string // GCP project for Vertex
 }
 
-// New creates a Gemini Client with a tuned http.Client.
-// name is the instance identifier; apiKey and baseURL configure the upstream.
+// New creates a Gemini Client for direct API access.
+// name is the instance identifier; baseURL configures the upstream.
 // If baseURL is empty, it defaults to the Gemini API endpoint.
-// If resolver is non-nil, it wraps the transport's DialContext with cached DNS lookups.
-func New(name, apiKey, baseURL string, resolver *dnscache.Resolver) *Client {
+// The provided client should have auth configured via its transport chain.
+func New(name, baseURL string, client *http.Client) *Client {
 	if baseURL == "" {
 		baseURL = defaultBaseURL
 	}
+	if client == nil {
+		client = &http.Client{}
+	}
 	return &Client{
 		name:    name,
-		apiKey:  apiKey,
 		baseURL: strings.TrimRight(baseURL, "/"),
-		http:    &http.Client{Transport: provider.NewTransport(resolver, true)},
+		http:    client,
 	}
+}
+
+// NewWithHosting creates a Gemini Client for a specific hosting platform.
+// For hosting="vertex", region and project specify the GCP location.
+func NewWithHosting(name, baseURL string, client *http.Client, hosting, region, project string) *Client {
+	c := New(name, baseURL, client)
+	c.hosting = hosting
+	c.region = region
+	c.project = project
+	return c
 }
 
 // Name returns the instance identifier.
@@ -65,13 +78,12 @@ func (c *Client) ChatCompletion(ctx context.Context, req *gateway.ChatRequest) (
 		return nil, fmt.Errorf("gemini: marshal request: %w", err)
 	}
 
-	u := fmt.Sprintf("%s/models/%s:generateContent", c.baseURL, req.Model)
+	u := c.generateURL(req.Model, "generateContent")
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, u, bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("gemini: create request: %w", err)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("x-goog-api-key", c.apiKey)
 
 	resp, err := c.http.Do(httpReq)
 	if err != nil {
@@ -100,13 +112,12 @@ func (c *Client) ChatCompletionStream(ctx context.Context, req *gateway.ChatRequ
 		return nil, fmt.Errorf("gemini: marshal request: %w", err)
 	}
 
-	u := fmt.Sprintf("%s/models/%s:streamGenerateContent?alt=sse", c.baseURL, req.Model)
+	u := c.generateURL(req.Model, "streamGenerateContent") + "?alt=sse"
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, u, bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("gemini: create request: %w", err)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("x-goog-api-key", c.apiKey)
 
 	resp, err := c.http.Do(httpReq)
 	if err != nil {
@@ -149,13 +160,12 @@ func (c *Client) Embeddings(ctx context.Context, req *gateway.EmbeddingRequest) 
 		return nil, fmt.Errorf("gemini: marshal request: %w", err)
 	}
 
-	u := fmt.Sprintf("%s/models/%s:embedContent", c.baseURL, req.Model)
+	u := c.generateURL(req.Model, "embedContent")
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, u, bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("gemini: create request: %w", err)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("x-goog-api-key", c.apiKey)
 
 	resp, err := c.http.Do(httpReq)
 	if err != nil {
@@ -191,12 +201,11 @@ func (c *Client) Embeddings(ctx context.Context, req *gateway.EmbeddingRequest) 
 
 // ListModels returns the available Gemini model IDs.
 func (c *Client) ListModels(ctx context.Context) ([]string, error) {
-	u := fmt.Sprintf("%s/models", c.baseURL)
+	u := c.modelsURL()
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
 		return nil, fmt.Errorf("gemini: create request: %w", err)
 	}
-	httpReq.Header.Set("x-goog-api-key", c.apiKey)
 
 	resp, err := c.http.Do(httpReq)
 	if err != nil {
@@ -236,8 +245,25 @@ func (c *Client) HealthCheck(ctx context.Context) error {
 // ProxyRequest forwards a raw HTTP request to the Gemini API.
 // It implements the gateway.NativeProxy interface.
 func (c *Client) ProxyRequest(ctx context.Context, w http.ResponseWriter, r *http.Request, path string) error {
-	return provider.ForwardRequest(ctx, c.http, c.baseURL, func(h http.Header) {
-		h.Set("x-goog-api-key", c.apiKey)
-	}, w, r, path)
+	return provider.ForwardRequest(ctx, c.http, c.baseURL, nil, w, r, path)
+}
+
+// generateURL returns the endpoint URL for a model action (generateContent,
+// streamGenerateContent, embedContent). For Vertex, it uses the publisher path.
+func (c *Client) generateURL(model, action string) string {
+	if c.hosting == "vertex" {
+		return fmt.Sprintf("%s/v1/projects/%s/locations/%s/publishers/google/models/%s:%s",
+			c.baseURL, c.project, c.region, model, action)
+	}
+	return fmt.Sprintf("%s/models/%s:%s", c.baseURL, model, action)
+}
+
+// modelsURL returns the models listing endpoint URL.
+func (c *Client) modelsURL() string {
+	if c.hosting == "vertex" {
+		return fmt.Sprintf("%s/v1/projects/%s/locations/%s/publishers/google/models",
+			c.baseURL, c.project, c.region)
+	}
+	return c.baseURL + "/models"
 }
 

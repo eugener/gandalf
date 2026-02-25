@@ -74,16 +74,26 @@ type AuthConfig struct {
 
 // ProviderEntry is a provider definition in the config file.
 type ProviderEntry struct {
-	Name      string   `yaml:"name"`
-	Type      string   `yaml:"type"`
-	BaseURL   string   `yaml:"base_url"`
-	APIKey    string   `yaml:"api_key"`
-	Models    []string `yaml:"models"`
-	Priority  int      `yaml:"priority"`
-	Weight    int      `yaml:"weight"`
-	Enabled   *bool    `yaml:"enabled"`
-	MaxRPS    int      `yaml:"max_rps"`
-	TimeoutMs int      `yaml:"timeout_ms"`
+	Name      string     `yaml:"name"`
+	Type      string     `yaml:"type"`
+	BaseURL   string     `yaml:"base_url"`
+	APIKey    string     `yaml:"api_key"`
+	Models    []string   `yaml:"models"`
+	Priority  int        `yaml:"priority"`
+	Weight    int        `yaml:"weight"`
+	Enabled   *bool      `yaml:"enabled"`
+	MaxRPS    int        `yaml:"max_rps"`
+	TimeoutMs int        `yaml:"timeout_ms"`
+	Hosting   string     `yaml:"hosting"` // "", "azure", "vertex"
+	Region    string     `yaml:"region"`  // GCP region for Vertex AI
+	Project   string     `yaml:"project"` // GCP project ID for Vertex AI
+	Auth      *AuthEntry `yaml:"auth"`    // explicit auth; inferred from api_key when absent
+}
+
+// AuthEntry configures provider authentication.
+type AuthEntry struct {
+	Type   string `yaml:"type"`    // "api_key", "gcp_oauth"
+	APIKey string `yaml:"api_key"` // explicit key (overrides top-level api_key)
 }
 
 // IsEnabled reports whether the provider is enabled (defaults to true when nil).
@@ -97,6 +107,31 @@ func (p ProviderEntry) ResolvedType() string {
 		return p.Type
 	}
 	return p.Name
+}
+
+// ResolvedHosting returns the normalized hosting mode ("", "azure", "vertex").
+func (p ProviderEntry) ResolvedHosting() string {
+	return p.Hosting
+}
+
+// ResolvedAuthType returns the auth type, inferring from context when Auth is nil.
+// Returns "gcp_oauth" for Vertex hosting, "api_key" otherwise.
+func (p ProviderEntry) ResolvedAuthType() string {
+	if p.Auth != nil && p.Auth.Type != "" {
+		return p.Auth.Type
+	}
+	if p.Hosting == "vertex" {
+		return "gcp_oauth"
+	}
+	return "api_key"
+}
+
+// ResolvedAPIKey returns the API key, preferring Auth.APIKey over top-level APIKey.
+func (p ProviderEntry) ResolvedAPIKey() string {
+	if p.Auth != nil && p.Auth.APIKey != "" {
+		return p.Auth.APIKey
+	}
+	return p.APIKey
 }
 
 // RouteEntry is a route definition in the config file.

@@ -6,10 +6,22 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	gateway "github.com/eugener/gandalf/internal"
+	"github.com/eugener/gandalf/internal/cloudauth"
 )
+
+// testClient creates a Client with an APIKeyTransport for test assertions.
+func testClient(name, key, baseURL string) *Client {
+	transport := &cloudauth.APIKeyTransport{
+		Key:        key,
+		HeaderName: "x-api-key",
+		Prefix:     "",
+	}
+	return New(name, baseURL, &http.Client{Transport: transport})
+}
 
 func TestTranslateRequest(t *testing.T) {
 	t.Parallel()
@@ -103,7 +115,7 @@ func TestChatCompletion(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := New("anthropic", "test-key", srv.URL+"/v1", nil)
+	client := testClient("anthropic", "test-key", srv.URL+"/v1")
 	resp, err := client.ChatCompletion(context.Background(), &gateway.ChatRequest{
 		Model:    "claude-sonnet-4-6",
 		Messages: []gateway.Message{{Role: "user", Content: json.RawMessage(`"hi"`)}},
@@ -138,7 +150,7 @@ func TestChatCompletionStream(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := New("anthropic", "test-key", srv.URL+"/v1", nil)
+	client := testClient("anthropic", "test-key", srv.URL+"/v1")
 	ch, err := client.ChatCompletionStream(context.Background(), &gateway.ChatRequest{
 		Model:    "claude-sonnet-4-6",
 		Messages: []gateway.Message{{Role: "user", Content: json.RawMessage(`"hi"`)}},
@@ -189,5 +201,76 @@ func TestMapStopReason(t *testing.T) {
 		if got := mapStopReason(tt.in); got != tt.want {
 			t.Errorf("mapStopReason(%q) = %q, want %q", tt.in, got, tt.want)
 		}
+	}
+}
+
+func TestVertexMessagesURL(t *testing.T) {
+	t.Parallel()
+
+	c := NewWithHosting("vertex-claude", "https://us-central1-aiplatform.googleapis.com",
+		&http.Client{}, "vertex", "us-central1", "my-project")
+
+	got := c.messagesURL("claude-sonnet-4-6")
+	want := "https://us-central1-aiplatform.googleapis.com/v1/projects/my-project/locations/us-central1/publishers/anthropic/models/claude-sonnet-4-6:rawPredict"
+	if got != want {
+		t.Errorf("messagesURL =\n  %s\nwant:\n  %s", got, want)
+	}
+}
+
+func TestVertexMarshalForHosting(t *testing.T) {
+	t.Parallel()
+
+	c := NewWithHosting("vertex-claude", "https://example.com",
+		&http.Client{}, "vertex", "us-central1", "proj")
+
+	aReq := &anthropicRequest{
+		Model:     "claude-sonnet-4-6",
+		MaxTokens: 1024,
+		Messages:  []anthropicMsg{{Role: "user", Content: json.RawMessage(`"hi"`)}},
+	}
+
+	body, err := c.marshalForHosting(aReq)
+	if err != nil {
+		t.Fatalf("marshalForHosting: %v", err)
+	}
+
+	bodyStr := string(body)
+	// Should have anthropic_version in body.
+	if !strings.Contains(bodyStr, `"anthropic_version":"2023-06-01"`) {
+		t.Error("body should contain anthropic_version")
+	}
+	// Should NOT have model field in body (it's in the URL).
+	if strings.Contains(bodyStr, `"model"`) {
+		t.Error("body should not contain model field for Vertex")
+	}
+}
+
+func TestVertexSetHeadersSkipsVersion(t *testing.T) {
+	t.Parallel()
+
+	c := NewWithHosting("vertex-claude", "https://example.com",
+		&http.Client{}, "vertex", "us-central1", "proj")
+
+	req, _ := http.NewRequest(http.MethodPost, "https://example.com", nil)
+	c.setHeaders(req)
+
+	if req.Header.Get("anthropic-version") != "" {
+		t.Error("Vertex mode should not set anthropic-version header")
+	}
+	if req.Header.Get("content-type") != "application/json" {
+		t.Error("should set content-type")
+	}
+}
+
+func TestDirectModeSetHeaders(t *testing.T) {
+	t.Parallel()
+
+	c := New("anthropic", "", nil)
+
+	req, _ := http.NewRequest(http.MethodPost, "https://example.com", nil)
+	c.setHeaders(req)
+
+	if req.Header.Get("anthropic-version") != "2023-06-01" {
+		t.Error("direct mode should set anthropic-version header")
 	}
 }

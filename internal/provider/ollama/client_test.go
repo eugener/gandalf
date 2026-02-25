@@ -10,7 +10,18 @@ import (
 	"testing"
 
 	gateway "github.com/eugener/gandalf/internal"
+	"github.com/eugener/gandalf/internal/cloudauth"
 )
+
+// testClientWithKey creates a Client with an APIKeyTransport for test assertions.
+func testClientWithKey(name, key, baseURL string) *Client {
+	transport := &cloudauth.APIKeyTransport{
+		Key:        key,
+		HeaderName: "Authorization",
+		Prefix:     "Bearer ",
+	}
+	return New(name, baseURL, &http.Client{Transport: transport})
+}
 
 func TestChatCompletion(t *testing.T) {
 	t.Parallel()
@@ -36,7 +47,7 @@ func TestChatCompletion(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	c := New("ollama", "", ts.URL, nil)
+	c := New("ollama", ts.URL, nil)
 	resp, err := c.ChatCompletion(context.Background(), &gateway.ChatRequest{
 		Model:    "llama3",
 		Messages: []gateway.Message{{Role: "user", Content: json.RawMessage(`"hi"`)}},
@@ -69,7 +80,7 @@ func TestChatCompletionStream(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	c := New("ollama", "", ts.URL, nil)
+	c := New("ollama", ts.URL, nil)
 	ch, err := c.ChatCompletionStream(context.Background(), &gateway.ChatRequest{
 		Model:    "llama3",
 		Messages: []gateway.Message{{Role: "user", Content: json.RawMessage(`"hi"`)}},
@@ -106,7 +117,7 @@ func TestListModels(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	c := New("ollama", "", ts.URL, nil)
+	c := New("ollama", ts.URL, nil)
 	models, err := c.ListModels(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -131,7 +142,7 @@ func TestEmbeddings(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	c := New("ollama", "", ts.URL, nil)
+	c := New("ollama", ts.URL, nil)
 	resp, err := c.Embeddings(context.Background(), &gateway.EmbeddingRequest{
 		Model: "nomic-embed-text",
 		Input: json.RawMessage(`"hello"`),
@@ -156,7 +167,7 @@ func TestEmbeddingsHTTPError(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	c := New("ollama", "", ts.URL, nil)
+	c := New("ollama", ts.URL, nil)
 	_, err := c.Embeddings(context.Background(), &gateway.EmbeddingRequest{
 		Model: "bad-model",
 		Input: json.RawMessage(`"hello"`),
@@ -178,7 +189,7 @@ func TestHTTPError(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	c := New("ollama", "", ts.URL, nil)
+	c := New("ollama", ts.URL, nil)
 	_, err := c.ChatCompletion(context.Background(), &gateway.ChatRequest{
 		Model:    "llama3",
 		Messages: []gateway.Message{{Role: "user", Content: json.RawMessage(`"hi"`)}},
@@ -205,7 +216,7 @@ func TestProxyRequest(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	c := New("ollama", "test-key", ts.URL, nil)
+	c := testClientWithKey("ollama", "test-key", ts.URL)
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/chat", strings.NewReader(`{"model":"llama3"}`))
 	req.Header.Set("Content-Type", "application/json")
@@ -224,7 +235,7 @@ func TestProxyRequest(t *testing.T) {
 
 func TestName(t *testing.T) {
 	t.Parallel()
-	c := New("ollama", "", "", nil)
+	c := New("ollama", "", nil)
 	if c.Name() != "ollama" {
 		t.Errorf("Name() = %q, want ollama", c.Name())
 	}
@@ -232,7 +243,7 @@ func TestName(t *testing.T) {
 
 func TestDefaultBaseURL(t *testing.T) {
 	t.Parallel()
-	c := New("ollama", "", "", nil)
+	c := New("ollama", "", nil)
 	if c.baseURL != defaultBaseURL {
 		t.Errorf("baseURL = %q, want %q", c.baseURL, defaultBaseURL)
 	}

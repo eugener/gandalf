@@ -88,8 +88,10 @@ func ForwardRequest(ctx context.Context, client *http.Client, baseURL string,
 		outReq.Header[key] = vals
 	}
 
-	// Apply provider-specific auth.
-	setAuth(outReq.Header)
+	// Apply provider-specific auth (if any; auth may be in the transport chain).
+	if setAuth != nil {
+		setAuth(outReq.Header)
+	}
 
 	resp, err := client.Do(outReq)
 	if err != nil {

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -20,6 +21,7 @@ import (
 	"github.com/eugener/gandalf/internal/app"
 	"github.com/eugener/gandalf/internal/auth"
 	"github.com/eugener/gandalf/internal/cache"
+	"github.com/eugener/gandalf/internal/cloudauth"
 	"github.com/eugener/gandalf/internal/config"
 	"github.com/eugener/gandalf/internal/provider"
 	"github.com/eugener/gandalf/internal/provider/anthropic"
@@ -30,9 +32,9 @@ import (
 	"github.com/eugener/gandalf/internal/server"
 	"github.com/eugener/gandalf/internal/storage/sqlite"
 	"github.com/eugener/gandalf/internal/telemetry"
-	"go.opentelemetry.io/otel/trace"
 	"github.com/eugener/gandalf/internal/tokencount"
 	"github.com/eugener/gandalf/internal/worker"
+	"go.opentelemetry.io/otel/trace"
 )
 
 func run(configPath string) error {
@@ -90,23 +92,44 @@ func run(configPath string) error {
 			slog.Info("provider skipped (disabled)", "name", p.Name)
 			continue
 		}
+
+		// Build HTTP client with auth transport chain.
+		client, err := buildProviderClient(ctx, p, dnsResolver)
+		if err != nil {
+			return fmt.Errorf("provider %q: %w", p.Name, err)
+		}
+
 		var prov gateway.Provider
 		switch p.ResolvedType() {
 		case "openai":
-			prov = openai.New(p.Name, p.APIKey, p.BaseURL, dnsResolver)
+			prov = openai.New(p.Name, p.BaseURL, client)
 		case "anthropic":
-			prov = anthropic.New(p.Name, p.APIKey, p.BaseURL, dnsResolver)
+			if p.ResolvedHosting() == "vertex" {
+				prov = anthropic.NewWithHosting(p.Name, p.BaseURL, client, p.Hosting, p.Region, p.Project)
+			} else {
+				prov = anthropic.New(p.Name, p.BaseURL, client)
+			}
 		case "gemini":
-			prov = gemini.New(p.Name, p.APIKey, p.BaseURL, dnsResolver)
+			if p.ResolvedHosting() == "vertex" {
+				prov = gemini.NewWithHosting(p.Name, p.BaseURL, client, p.Hosting, p.Region, p.Project)
+			} else {
+				prov = gemini.New(p.Name, p.BaseURL, client)
+			}
 		case "ollama":
-			prov = ollama.New(p.Name, p.APIKey, p.BaseURL, dnsResolver)
+			prov = ollama.New(p.Name, p.BaseURL, client)
 		default:
 			slog.Warn("unknown provider type, skipping", "name", p.Name, "type", p.ResolvedType())
 			continue
 		}
 		_, hasNative := prov.(gateway.NativeProxy)
 		reg.Register(p.Name, prov)
-		slog.Info("provider registered", "name", p.Name, "type", p.ResolvedType(), "native_proxy", hasNative)
+		slog.Info("provider registered",
+			"name", p.Name,
+			"type", p.ResolvedType(),
+			"hosting", p.ResolvedHosting(),
+			"auth", p.ResolvedAuthType(),
+			"native_proxy", hasNative,
+		)
 	}
 
 	for _, r := range cfg.Routes {
@@ -311,4 +334,60 @@ func run(configPath string) error {
 
 	slog.Info("gandalf stopped")
 	return nil
+}
+
+// buildProviderClient assembles an *http.Client with the auth transport chain
+// for a provider entry. The base transport includes DNS caching and HTTP/2
+// (except Ollama which uses HTTP/1.1).
+func buildProviderClient(ctx context.Context, p config.ProviderEntry, resolver *dnscache.Resolver) (*http.Client, error) {
+	useHTTP2 := p.ResolvedType() != "ollama"
+	base := provider.NewTransport(resolver, useHTTP2)
+
+	var transport http.RoundTripper = base
+
+	switch p.ResolvedAuthType() {
+	case "gcp_oauth":
+		gcpTransport, err := cloudauth.NewGCPOAuthTransport(ctx, base,
+			"https://www.googleapis.com/auth/cloud-platform",
+		)
+		if err != nil {
+			return nil, fmt.Errorf("gcp oauth: %w", err)
+		}
+		transport = gcpTransport
+	case "api_key":
+		apiKey := p.ResolvedAPIKey()
+		if apiKey != "" {
+			headerName, prefix := authHeaderForType(p.ResolvedType(), p.ResolvedHosting())
+			transport = &cloudauth.APIKeyTransport{
+				Key:        apiKey,
+				HeaderName: headerName,
+				Prefix:     prefix,
+				Base:       base,
+			}
+		}
+		// Empty API key: no auth transport (e.g. local Ollama).
+	default:
+		return nil, fmt.Errorf("unsupported auth type: %q", p.ResolvedAuthType())
+	}
+
+	return &http.Client{Transport: transport}, nil
+}
+
+// authHeaderForType returns the (headerName, prefix) for API key auth
+// based on provider type and hosting mode.
+func authHeaderForType(provType, hosting string) (string, string) {
+	switch {
+	case provType == "openai" && hosting == "azure":
+		return "api-key", ""
+	case provType == "openai":
+		return "Authorization", "Bearer "
+	case provType == "anthropic":
+		return "x-api-key", ""
+	case provType == "gemini":
+		return "x-goog-api-key", ""
+	case provType == "ollama":
+		return "Authorization", "Bearer "
+	default:
+		return "Authorization", "Bearer "
+	}
 }

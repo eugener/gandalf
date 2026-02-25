@@ -10,7 +10,18 @@ import (
 	"testing"
 
 	gateway "github.com/eugener/gandalf/internal"
+	"github.com/eugener/gandalf/internal/cloudauth"
 )
+
+// testClient creates a Client with an APIKeyTransport for test assertions.
+func testClient(name, key, baseURL string) *Client {
+	transport := &cloudauth.APIKeyTransport{
+		Key:        key,
+		HeaderName: "x-goog-api-key",
+		Prefix:     "",
+	}
+	return New(name, baseURL, &http.Client{Transport: transport})
+}
 
 func TestTranslateRequest(t *testing.T) {
 	t.Parallel()
@@ -99,7 +110,7 @@ func TestChatCompletion(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := New("gemini", "test-key", srv.URL+"/v1beta", nil)
+	client := testClient("gemini", "test-key", srv.URL+"/v1beta")
 	resp, err := client.ChatCompletion(context.Background(), &gateway.ChatRequest{
 		Model:    "gemini-2.0-flash",
 		Messages: []gateway.Message{{Role: "user", Content: json.RawMessage(`"hi"`)}},
@@ -126,7 +137,7 @@ func TestChatCompletionStreamEOFTerminated(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := New("gemini", "test-key", srv.URL+"/v1beta", nil)
+	client := testClient("gemini", "test-key", srv.URL+"/v1beta")
 	ch, err := client.ChatCompletionStream(context.Background(), &gateway.ChatRequest{
 		Model:    "gemini-2.0-flash",
 		Messages: []gateway.Message{{Role: "user", Content: json.RawMessage(`"hi"`)}},
@@ -173,7 +184,7 @@ func TestEmbeddings(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := New("gemini", "test-key", srv.URL+"/v1beta", nil)
+	client := testClient("gemini", "test-key", srv.URL+"/v1beta")
 	resp, err := client.Embeddings(context.Background(), &gateway.EmbeddingRequest{
 		Model: "text-embedding-004",
 		Input: json.RawMessage(`"hello world"`),
@@ -198,7 +209,7 @@ func TestEmbeddingsArrayInput(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := New("gemini", "test-key", srv.URL+"/v1beta", nil)
+	client := testClient("gemini", "test-key", srv.URL+"/v1beta")
 	resp, err := client.Embeddings(context.Background(), &gateway.EmbeddingRequest{
 		Model: "text-embedding-004",
 		Input: json.RawMessage(`["hello","world"]`),
@@ -220,7 +231,7 @@ func TestEmbeddingsHTTPError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := New("gemini", "test-key", srv.URL+"/v1beta", nil)
+	client := testClient("gemini", "test-key", srv.URL+"/v1beta")
 	_, err := client.Embeddings(context.Background(), &gateway.EmbeddingRequest{
 		Model: "text-embedding-004",
 		Input: json.RawMessage(`"hello"`),
@@ -242,7 +253,7 @@ func TestListModels(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := New("gemini", "test-key", srv.URL+"/v1beta", nil)
+	client := testClient("gemini", "test-key", srv.URL+"/v1beta")
 	models, err := client.ListModels(context.Background())
 	if err != nil {
 		t.Fatalf("ListModels: %v", err)
@@ -265,7 +276,7 @@ func TestListModelsHTTPError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := New("gemini", "bad-key", srv.URL+"/v1beta", nil)
+	client := testClient("gemini", "bad-key", srv.URL+"/v1beta")
 	_, err := client.ListModels(context.Background())
 	if err == nil {
 		t.Fatal("expected error for HTTP 403")
@@ -281,7 +292,7 @@ func TestHealthCheck(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := New("gemini", "test-key", srv.URL+"/v1beta", nil)
+	client := testClient("gemini", "test-key", srv.URL+"/v1beta")
 	if err := client.HealthCheck(context.Background()); err != nil {
 		t.Fatalf("HealthCheck: %v", err)
 	}
@@ -303,5 +314,42 @@ func TestMapStopReason(t *testing.T) {
 		if got := mapStopReason(tt.in); got != tt.want {
 			t.Errorf("mapStopReason(%q) = %q, want %q", tt.in, got, tt.want)
 		}
+	}
+}
+
+func TestVertexGenerateURL(t *testing.T) {
+	t.Parallel()
+
+	c := NewWithHosting("vertex-gemini", "https://us-central1-aiplatform.googleapis.com",
+		&http.Client{}, "vertex", "us-central1", "my-project")
+
+	got := c.generateURL("gemini-2.0-flash", "generateContent")
+	want := "https://us-central1-aiplatform.googleapis.com/v1/projects/my-project/locations/us-central1/publishers/google/models/gemini-2.0-flash:generateContent"
+	if got != want {
+		t.Errorf("generateURL =\n  %s\nwant:\n  %s", got, want)
+	}
+}
+
+func TestVertexModelsURL(t *testing.T) {
+	t.Parallel()
+
+	c := NewWithHosting("vertex-gemini", "https://us-central1-aiplatform.googleapis.com",
+		&http.Client{}, "vertex", "us-central1", "my-project")
+
+	got := c.modelsURL()
+	want := "https://us-central1-aiplatform.googleapis.com/v1/projects/my-project/locations/us-central1/publishers/google/models"
+	if got != want {
+		t.Errorf("modelsURL =\n  %s\nwant:\n  %s", got, want)
+	}
+}
+
+func TestDirectGenerateURL(t *testing.T) {
+	t.Parallel()
+
+	c := New("gemini", "https://generativelanguage.googleapis.com/v1beta", nil)
+	got := c.generateURL("gemini-2.0-flash", "generateContent")
+	want := "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent"
+	if got != want {
+		t.Errorf("generateURL =\n  %s\nwant:\n  %s", got, want)
 	}
 }

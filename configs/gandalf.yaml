@@ -54,6 +54,44 @@ providers:
     timeout_ms: 60000
     enabled: false  # enable when Ollama is running locally
 
+  # --- Cloud hosting examples (disabled by default) ---
+
+  # Azure OpenAI: same wire format as openai, different base_url + auth header
+  # - name: azure-openai
+  #   type: openai
+  #   hosting: azure
+  #   base_url: "https://${AZURE_OPENAI_ENDPOINT}/openai/deployments/gpt-4o"
+  #   api_key: "${AZURE_OPENAI_API_KEY}"
+  #   models: [gpt-4o]
+  #   priority: 5
+  #   enabled: false
+
+  # Vertex AI Gemini: GCP OAuth via ADC, Vertex URL rewriting
+  # - name: vertex-gemini
+  #   type: gemini
+  #   hosting: vertex
+  #   region: us-central1
+  #   project: "${GCP_PROJECT_ID}"
+  #   base_url: "https://us-central1-aiplatform.googleapis.com"
+  #   auth:
+  #     type: gcp_oauth
+  #   models: [gemini-2.0-flash]
+  #   priority: 6
+  #   enabled: false
+
+  # Vertex AI Anthropic: GCP OAuth via ADC, rawPredict endpoint
+  # - name: vertex-anthropic
+  #   type: anthropic
+  #   hosting: vertex
+  #   region: us-central1
+  #   project: "${GCP_PROJECT_ID}"
+  #   base_url: "https://us-central1-aiplatform.googleapis.com"
+  #   auth:
+  #     type: gcp_oauth
+  #   models: [claude-sonnet-4-6]
+  #   priority: 7
+  #   enabled: false
+
 routes:
   - model_alias: gpt-4o
     targets:

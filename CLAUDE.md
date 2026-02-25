@@ -18,13 +18,14 @@ All make targets set `GOEXPERIMENT=jsonv2` for lower alloc counts in JSON-heavy 
 
 ## Architecture
 
-Hexagonal architecture. Domain types at `internal/gateway.go`, interfaces at consumer level. Multi-provider support (OpenAI, Anthropic, Gemini, Ollama) with Name/Type split (instance ID vs wire format), priority failover routing, SSE streaming, native API passthrough. Per-key rate limiting, response caching, async usage recording, quota enforcement. Admin CRUD API with RBAC, usage aggregation, Prometheus metrics, OpenTelemetry tracing.
+Hexagonal architecture. Domain types at `internal/gateway.go`, interfaces at consumer level. Multi-provider support (OpenAI, Anthropic, Gemini, Ollama) with Name/Type split (instance ID vs wire format), priority failover routing, SSE streaming, native API passthrough. Cloud hosting: Azure OpenAI (API key auth) and Vertex AI (GCP OAuth ADC) for Gemini/Anthropic with URL rewriting. Auth extracted into `http.RoundTripper` decorators -- adapters are unaware of cloud auth. Per-key rate limiting, response caching, async usage recording, quota enforcement. Admin CRUD API with RBAC, usage aggregation, Prometheus metrics, OpenTelemetry tracing.
 
 Key packages:
 - `internal/gateway.go` -- domain types + interfaces (no project imports)
 - `internal/server/` -- HTTP handlers + middleware (chi), SSE streaming, native passthrough, admin CRUD, metrics/tracing middleware
 - `internal/app/` -- ProxyService (failover with tracing spans), RouterService (cached routing), KeyManager
 - `internal/provider/` -- Registry + adapters (openai, anthropic, gemini, ollama)
+- `internal/cloudauth/` -- `http.RoundTripper` decorators: `APIKeyTransport`, `GCPOAuthTransport` (ADC)
 - `internal/ratelimit/` -- dual token bucket (RPM+TPM), Registry, QuotaTracker
 - `internal/cache/` -- Cache interface, otter W-TinyLFU memory implementation
 - `internal/tokencount/` -- token estimation for TPM rate limiting
@@ -34,7 +35,7 @@ Key packages:
 - `internal/config/` -- YAML config with `${ENV}` expansion, DB bootstrap, telemetry config
 - `internal/auth/` -- API key auth with otter cache, per-key roles
 - `internal/testutil/` -- reusable test fakes
-- `cmd/gandalf/` -- entrypoint, wiring, startup logging, graceful shutdown
+- `cmd/gandalf/` -- entrypoint, wiring, transport chain assembly, startup logging, graceful shutdown
 
 See [docs/architecture.md](docs/architecture.md) for full directory listing, dependency flow, interfaces, streaming design, failover, and native passthrough details.
 
@@ -67,13 +68,17 @@ API keys require `gnd_` prefix. Set via `GANDALF_ADMIN_KEY` env var. Delete `gan
 | `golang.org/x/sync` | errgroup for worker management |
 | `prometheus/client_golang` | Prometheus metrics (native histograms) |
 | `go.opentelemetry.io/otel` | Distributed tracing (OTLP gRPC) |
+| `golang.org/x/oauth2` | GCP OAuth2 ADC for Vertex AI cloud auth |
 
 ## Conventions
 
 - Interfaces defined at consumer, not alongside implementation
 - Table-driven tests with `t.Parallel()`
 - Inline fakes in `server_test.go`; `testutil/` for reusable fakes
+- Provider constructors: `New(name, baseURL string, client *http.Client)`. Auth via transport chain, not in adapters
 - Provider `Name()` = instance ID (registry key, DB PK), `Type()` = wire format (e.g. "openai"). Config `type` defaults to `name` for backward compat
+- Cloud hosting: `NewWithHosting(name, baseURL, client, hosting, region, project)` for Vertex URL rewriting (Anthropic, Gemini)
+- Config `ProviderEntry`: `hosting` ("", "azure", "vertex"), `region`, `project`, `auth` sub-struct. `ResolvedAuthType()` infers from hosting
 - Provider `apiError` types implement `HTTPStatus() int` for failover decisions
 - Context helpers: `ContextWithIdentity`, `IdentityFromContext`, `ContextWithRequestID`, `RequestIDFromContext`
 - Config supports `${ENV_VAR}` expansion; bootstrap seeds on first run (idempotent)

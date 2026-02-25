@@ -9,8 +9,6 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/rs/dnscache"
-
 	gateway "github.com/eugener/gandalf/internal"
 	"github.com/eugener/gandalf/internal/provider"
 	"github.com/eugener/gandalf/internal/provider/sseutil"
@@ -29,24 +27,25 @@ var (
 // Client is an OpenAI provider adapter that implements gateway.Provider.
 type Client struct {
 	name    string
-	apiKey  string
 	baseURL string
 	http    *http.Client
 }
 
-// New creates an OpenAI Client with a tuned http.Client.
-// name is the instance identifier; apiKey and baseURL configure the upstream.
+// New creates an OpenAI Client.
+// name is the instance identifier; baseURL configures the upstream.
 // If baseURL is empty, it defaults to "https://api.openai.com/v1".
-// If resolver is non-nil, it wraps the transport's DialContext with cached DNS lookups.
-func New(name, apiKey, baseURL string, resolver *dnscache.Resolver) *Client {
+// The provided client should have auth configured via its transport chain.
+func New(name, baseURL string, client *http.Client) *Client {
 	if baseURL == "" {
 		baseURL = defaultBaseURL
 	}
+	if client == nil {
+		client = &http.Client{}
+	}
 	return &Client{
 		name:    name,
-		apiKey:  apiKey,
 		baseURL: strings.TrimRight(baseURL, "/"),
-		http:    &http.Client{Transport: provider.NewTransport(resolver, true)},
+		http:    client,
 	}
 }
 
@@ -199,13 +198,11 @@ func (c *Client) HealthCheck(ctx context.Context) error {
 // ProxyRequest forwards a raw HTTP request to the OpenAI API.
 // It implements the gateway.NativeProxy interface.
 func (c *Client) ProxyRequest(ctx context.Context, w http.ResponseWriter, r *http.Request, path string) error {
-	return provider.ForwardRequest(ctx, c.http, c.baseURL, func(h http.Header) {
-		h.Set("Authorization", "Bearer "+c.apiKey)
-	}, w, r, path)
+	return provider.ForwardRequest(ctx, c.http, c.baseURL, nil, w, r, path)
 }
 
-// setHeaders applies common headers (auth + content-type) to an outbound request.
+// setHeaders applies content-type to an outbound request.
+// Auth is handled by the transport chain.
 func (c *Client) setHeaders(r *http.Request) {
-	r.Header.Set("Authorization", "Bearer "+c.apiKey)
 	r.Header.Set("Content-Type", "application/json")
 }

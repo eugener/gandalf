@@ -9,7 +9,18 @@ import (
 	"testing"
 
 	gateway "github.com/eugener/gandalf/internal"
+	"github.com/eugener/gandalf/internal/cloudauth"
 )
+
+// testClient creates a Client with an APIKeyTransport for test assertions.
+func testClient(name, key, baseURL string) *Client {
+	transport := &cloudauth.APIKeyTransport{
+		Key:        key,
+		HeaderName: "Authorization",
+		Prefix:     "Bearer ",
+	}
+	return New(name, baseURL, &http.Client{Transport: transport})
+}
 
 func TestChatCompletionStream(t *testing.T) {
 	t.Parallel()
@@ -41,7 +52,7 @@ func TestChatCompletionStream(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := New("openai", "test-key", srv.URL+"/v1", nil)
+	client := testClient("openai", "test-key", srv.URL+"/v1")
 	ch, err := client.ChatCompletionStream(context.Background(), &gateway.ChatRequest{
 		Model:    "gpt-4o",
 		Messages: []gateway.Message{{Role: "user", Content: json.RawMessage(`"hi"`)}},
@@ -88,7 +99,7 @@ func TestChatCompletionStreamContextCancel(t *testing.T) {
 	defer srv.Close()
 
 	ctx, cancel := context.WithCancel(context.Background())
-	client := New("openai", "test-key", srv.URL+"/v1", nil)
+	client := testClient("openai", "test-key", srv.URL+"/v1")
 	ch, err := client.ChatCompletionStream(ctx, &gateway.ChatRequest{
 		Model:    "gpt-4o",
 		Messages: []gateway.Message{{Role: "user", Content: json.RawMessage(`"hi"`)}},
@@ -123,7 +134,7 @@ func TestChatCompletionStreamHTTPError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := New("openai", "test-key", srv.URL+"/v1", nil)
+	client := testClient("openai", "test-key", srv.URL+"/v1")
 	_, err := client.ChatCompletionStream(context.Background(), &gateway.ChatRequest{
 		Model:    "gpt-4o",
 		Messages: []gateway.Message{{Role: "user", Content: json.RawMessage(`"hi"`)}},
@@ -165,7 +176,7 @@ func TestChatCompletion(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := New("openai-us", "test-key", srv.URL+"/v1", nil)
+	client := testClient("openai-us", "test-key", srv.URL+"/v1")
 	resp, err := client.ChatCompletion(context.Background(), &gateway.ChatRequest{
 		Model:    "gpt-4o",
 		Messages: []gateway.Message{{Role: "user", Content: json.RawMessage(`"hi"`)}},
@@ -190,7 +201,7 @@ func TestChatCompletionHTTPError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := New("openai", "test-key", srv.URL+"/v1", nil)
+	client := testClient("openai", "test-key", srv.URL+"/v1")
 	_, err := client.ChatCompletion(context.Background(), &gateway.ChatRequest{
 		Model:    "gpt-4o",
 		Messages: []gateway.Message{{Role: "user", Content: json.RawMessage(`"hi"`)}},
@@ -215,7 +226,7 @@ func TestListModels(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := New("openai", "test-key", srv.URL+"/v1", nil)
+	client := testClient("openai", "test-key", srv.URL+"/v1")
 	models, err := client.ListModels(context.Background())
 	if err != nil {
 		t.Fatalf("ListModels: %v", err)
@@ -237,7 +248,7 @@ func TestListModelsHTTPError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := New("openai", "bad-key", srv.URL+"/v1", nil)
+	client := testClient("openai", "bad-key", srv.URL+"/v1")
 	_, err := client.ListModels(context.Background())
 	if err == nil {
 		t.Fatal("expected error for HTTP 401")
@@ -253,7 +264,7 @@ func TestHealthCheck(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := New("openai", "test-key", srv.URL+"/v1", nil)
+	client := testClient("openai", "test-key", srv.URL+"/v1")
 	if err := client.HealthCheck(context.Background()); err != nil {
 		t.Fatalf("HealthCheck: %v", err)
 	}
@@ -262,7 +273,7 @@ func TestHealthCheck(t *testing.T) {
 func TestNameAndType(t *testing.T) {
 	t.Parallel()
 
-	client := New("openai-eu", "key", "", nil)
+	client := New("openai-eu", "", nil)
 	if client.Name() != "openai-eu" {
 		t.Errorf("Name() = %q, want openai-eu", client.Name())
 	}
@@ -283,7 +294,7 @@ func TestEmbeddings(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := New("openai", "test-key", srv.URL+"/v1", nil)
+	client := testClient("openai", "test-key", srv.URL+"/v1")
 	resp, err := client.Embeddings(context.Background(), &gateway.EmbeddingRequest{
 		Model: "text-embedding-3-small",
 		Input: json.RawMessage(`"hello world"`),
