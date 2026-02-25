@@ -62,8 +62,7 @@ gandalf/
     errors.go                      # Sentinel errors (ErrUnauthorized, ErrNotFound, ErrRateLimited, ErrProviderError, etc.)
     auth/
       apikey.go                    # API key auth: hash -> otter cache -> DB fallback, subtle.ConstantTimeCompare
-      jwt.go                       # (Phase 5) JWT/OIDC auth: JWKS cache, token validation
-      auth.go                      # (Phase 5) Dual-mode dispatcher: JWT first, API key fallback
+      apikey_test.go               # Auth cache, validation, expiry tests
     server/
       server.go                    # New(Deps) http.Handler, route registration (chi)
       proxy.go                     # handleChatCompletion (non-stream + stream branch) + helpers
@@ -71,10 +70,13 @@ gandalf/
       sse.go                       # SSE write helpers: writeSSEHeaders, writeSSEData, writeSSEDone, writeSSEKeepAlive
       embeddings.go                # handleEmbeddings handler
       models.go                    # handleListModels handler (aggregates from all providers)
-      middleware.go                # recovery, requestID, logging, authenticate (statusWriter supports Flush)
+      middleware.go                # recovery, requestID, logging, authenticate, rateLimit, requirePerm, tracing
       health.go                    # handleHealthz, handleReadyz
-      admin.go                     # (Phase 4) handleAdmin* CRUD handlers
+      admin.go                     # Admin CRUD handlers: providers, keys, routes, cache purge, usage query
       server_test.go               # Handler tests with inline fakes
+      admin_test.go                # Admin CRUD + RBAC enforcement tests
+      cache_test.go                # Cache key generation + cacheability tests
+      metrics_test.go              # Prometheus metrics integration tests
       server_bench_test.go         # Benchmarks: ChatCompletion, Stream, Healthz
       native_test.go               # Native passthrough E2E tests: Anthropic, Gemini, Azure, Ollama
       sse_test.go                  # SSE write helper unit tests
@@ -85,8 +87,6 @@ gandalf/
       keymanager.go                # KeyManager: create/delete API keys
       proxy_test.go                # Failover tests: primary ok, failover, client error, all fail
       router_test.go               # Multi-target, no route default, empty targets
-      orgmanager.go                # (Phase 5) Organization/Team CRUD, limit inheritance
-      usage.go                     # (Phase 3) UsageService: quota checks, query, aggregation
     provider/
       provider.go                  # Registry: thread-safe name->Provider map
       proxy.go                     # ForwardRequest: shared native HTTP passthrough helper
@@ -115,7 +115,7 @@ gandalf/
       sqlite/
         db.go, apikey.go, provider.go, route.go, org.go, usage.go
         sqlite_test.go
-        migrations/001_init.sql
+        migrations/001_init.sql, 002_key_role.sql, 003_usage_rollups.sql, 004_provider_type.sql
     cache/
       cache.go                     # Cache interface (Get/Set/Delete/Purge)
       memory.go                    # In-memory W-TinyLFU cache (otter)
@@ -129,24 +129,23 @@ gandalf/
       tokencount_test.go
     worker/
       worker.go                    # Worker interface: Run(ctx) error
-      runner.go                    # errgroup-based runner, starts all workers
-      usage_recorder.go            # Buffered channel -> batch DB insert
-      quota_sync.go                # Periodic quota counter reload from DB
-      runner_test.go, usage_recorder_test.go
+      runner.go                    # errgroup-based runner, cancel-on-first-error
+      usage_recorder.go            # Buffered channel -> batch DB flush (100 records or 5s)
+      usage_rollup.go              # Periodic aggregation of raw usage into hourly rollups
+      quota_sync.go                # Periodic quota counter reload from DB (60s)
+      runner_test.go, usage_recorder_test.go, usage_rollup_test.go, quota_sync_test.go
     config/
       config.go                    # Config struct, Load(path), env var expansion
       bootstrap.go                 # Seed DB from YAML on first run (idempotent)
       config_test.go
-    cloudauth/                     # (Phase 4.5) Auth transports for cloud-hosted providers
-      cloudauth.go                 # APIKeyTransport (extracted), transport factory
+    cloudauth/                     # Auth transports for cloud-hosted providers
+      cloudauth.go                 # APIKeyTransport (extracted)
       gcp.go                       # GCPOAuthTransport: ADC/SA auto-refreshing token
-      azure.go                     # AzureEntraTransport: DefaultAzureCredential
-      aws.go                       # AWSSigV4Transport: request signing
       cloudauth_test.go
-    telemetry/                     # (Phase 4)
-      telemetry.go                 # Setup(cfg) (shutdown func, error) -- single init point
-      metrics.go                   # Prometheus metric definitions, pre-cached label children
-      tracing.go                   # OTel tracer provider + OTLP exporter setup
+    telemetry/
+      metrics.go                   # Prometheus Metrics struct + NewMetrics(registerer)
+      tracing.go                   # SetupTracing (OTLP gRPC) + Tracer() helper
+      metrics_test.go              # Metrics registration + recording tests
     testutil/
       fake_provider.go             # FakeProvider with configurable callbacks + FakeStreamChan
       fake_store.go                # In-memory FakeStore implementing storage.Store
@@ -177,22 +176,24 @@ gandalf/
 
 **`testutil/` = shared test fakes** -- importable by any `_test.go` file. Hand-written fakes over generated mocks for small interfaces (compile-time interface checks, inspectable state, no EXPECT boilerplate).
 
-**`testdata/cassettes/`** -- go-vcr recorded HTTP responses for provider adapter tests. Committed to VCS, deterministic replay in CI without network access.
-
 ### Dependency flow
 
 ```
-cmd/gandalf         -- wires concrete types, imports everything
-  -> server/        -- HTTP transport, depends on app interfaces
-  -> app/           -- business logic, depends on domain interfaces
+cmd/gandalf         -- wires concrete types, DNS resolver, imports everything
+  -> server/        -- HTTP transport + SSE streaming, depends on app + gateway interfaces
+  -> app/           -- business logic, failover routing, depends on storage + provider interfaces
   -> internal/      -- domain types + interfaces (no project imports)
-  <- provider/*     -- implements gateway.Provider
+  <- provider/*     -- implements gateway.Provider + NativeProxy
+  <- provider/sseutil -- shared SSE reading utilities
+  <- provider/proxy.go -- shared ForwardRequest helper for NativeProxy implementations
   <- cloudauth/     -- auth transports for cloud-hosted providers (injected into provider HTTP clients)
-  <- storage/*      -- implements gateway.*Store
-  <- cache/         -- implements gateway.Cache
-  <- worker/        -- implements background tasks
-  <- telemetry/     -- OTel SDK wiring, only imported by cmd/
-  <- config/        -- Config struct + Load()
+  <- storage/sqlite -- implements storage.Store
+  <- auth/          -- implements gateway.Authenticator
+  <- cache/         -- Cache interface + otter W-TinyLFU memory implementation
+  <- worker/        -- Worker interface, Runner, UsageRecorder, QuotaSyncWorker, UsageRollupWorker
+  <- telemetry/     -- Prometheus metrics, OTel tracing
+  <- config/        -- Config struct + Load() + Bootstrap()
+  <- testutil/      -- reusable test fakes
 ```
 
 Arrows show import direction. No circular dependencies because interfaces flow inward (defined at consumer, implemented by adapters).
@@ -204,7 +205,7 @@ Arrows show import direction. No circular dependencies because interfaces flow i
 | `server/` | Unit | `httptest.NewRecorder` + chi router's `ServeHTTP`. Fakes for app services |
 | `server/` (SSE) | Integration | `httptest.NewServer` + streaming client. Needs real TCP for `Flush()` |
 | `app/` | Unit | Table-driven tests with `testutil.FakeProvider` and `testutil.FakeStore` |
-| `provider/*` | Integration | go-vcr cassettes for deterministic replay. `t.Skip` when no env var |
+| `provider/*` | Integration | `httptest.NewServer` with canned responses for streaming, cancellation, HTTP errors |
 | `storage/sqlite/` | Integration | Real `:memory:` SQLite. Same engine, no containers |
 | `middleware` | Unit + bench | Wrap known handler, assert status/headers. `b.ReportAllocs()` for hot path |
 | `worker/` | Unit | Inject fake store, verify batching/flushing behavior |
@@ -713,37 +714,34 @@ DNS caching via `rs/dnscache` wrapped in `DialContext` -- avoids stale DNS after
 
 ## Dependencies
 
-| Package | Purpose | Rationale | Phase |
-|---------|---------|-----------|-------|
-| `github.com/go-chi/chi/v5` | HTTP router + middleware composition | Subrouter grouping, 100% http.Handler compat, zero-alloc radix tree | 1 |
-| `modernc.org/sqlite` | Pure-Go SQLite (no CGO, static binary) | CGO_ENABLED=0, database/sql compat, WAL mode, actively maintained | 1 |
-| `github.com/pressly/goose/v3` | DB migrations | Embedded SQL migrations, database/sql driver-agnostic | 1 |
-| `github.com/maypok86/otter/v2` | In-memory cache (auth + response) | W-TinyLFU eviction, per-entry TTL, generics, ~300ns reads, no dropped writes | 1 |
-| `github.com/google/uuid` | UUID v7 request IDs | RFC 9562, `EnableRandPool()` reduces syscall overhead | 1 |
-| `go.yaml.in/yaml/v3` | YAML config parsing | Drop-in replacement for unmaintained `gopkg.in/yaml.v3` | 1 |
-| `github.com/pkoukk/tiktoken-go` | Token counting | cl100k_base + o200k_base, matches Python tiktoken exactly | 3 |
-| `golang.org/x/time/rate` | Token bucket rate limiting | Stdlib-adjacent, ~50ns Allow(), 0 allocs on hot path | 3 |
-| `github.com/prometheus/client_golang` | Prometheus metrics | Native histograms (atomic ops), pre-cached label children | 4 |
-| `go.opentelemetry.io/otel` + OTLP SDK | Distributed tracing | OTLP gRPC exporter (Jaeger exporter deprecated), ParentBased sampler | 4 |
-| `github.com/rs/zerolog` | Zero-alloc structured logging | 30 ns/op, 0 allocs; diode writer for non-blocking async writes | 4 |
-| `github.com/rs/dnscache` | DNS caching for upstream calls | Avoids DNS lookup per new connection to provider endpoints | 2 |
-| `golang.org/x/sync/singleflight` | Request coalescing | Dedup identical in-flight requests, stdlib-adjacent | 6 |
-| `github.com/tidwall/gjson` | Incremental JSON field extraction | ~1 alloc per field vs full unmarshal; SSE translation hot path | 2 |
-| `github.com/lestrrat-go/jwx/v2` | JWT validation + JWKS cache | Full JOSE stack, background JWKS auto-refresh, stale-on-failure | 5 |
+| Package | Purpose | Rationale |
+|---------|---------|-----------|
+| `github.com/go-chi/chi/v5` | HTTP router + middleware composition | Subrouter grouping, 100% http.Handler compat, zero-alloc radix tree |
+| `modernc.org/sqlite` | Pure-Go SQLite (no CGO, static binary) | CGO_ENABLED=0, database/sql compat, WAL mode, actively maintained |
+| `github.com/pressly/goose/v3` | DB migrations | Embedded SQL migrations, database/sql driver-agnostic |
+| `github.com/maypok86/otter/v2` | In-memory cache (auth + routing + response) | W-TinyLFU eviction, per-entry TTL, generics, ~300ns reads, no dropped writes |
+| `github.com/google/uuid` | UUID v7 request IDs | RFC 9562, `EnableRandPool()` reduces syscall overhead |
+| `go.yaml.in/yaml/v3` | YAML config parsing | Drop-in replacement for unmaintained `gopkg.in/yaml.v3` |
+| `github.com/prometheus/client_golang` | Prometheus metrics | Native histograms (atomic ops), pre-cached label children |
+| `go.opentelemetry.io/otel` + OTLP SDK | Distributed tracing | OTLP gRPC exporter (Jaeger exporter deprecated), ParentBased sampler |
+| `github.com/rs/dnscache` | DNS caching for upstream calls | Avoids DNS lookup per new connection to provider endpoints |
+| `github.com/tidwall/gjson` | Incremental JSON field extraction | ~1 alloc per field vs full unmarshal; SSE translation hot path |
+| `golang.org/x/oauth2` | GCP OAuth2 ADC for Vertex AI | Auto-refreshing token source for cloud auth transports |
+| `golang.org/x/sync` | errgroup for worker management | Parallel worker execution with cancel-on-first-error |
 
 Stdlib: `net/http`, `database/sql`, `crypto/sha256`, `crypto/subtle`, `sync`, `context`, `encoding/json`, `bufio`.
 
 ### Dependency decisions
 
 - **Cache: otter v2 over hashicorp-lru/ristretto** -- Ristretto silently drops writes under contention (lossy by design), dangerous for auth cache correctness. hashicorp-lru has single-mutex contention and goroutine leak in TTL cleanup. Otter's W-TinyLFU provides better hit rates for Zipf-distributed access patterns (typical for HTTP caches).
-- **Logging: zerolog over slog** -- 5x faster (30 vs 174 ns/op), 0 allocs. On the hot path every nanosecond counts. Can expose slog.Handler interface for library compatibility if needed.
+- **Logging: log/slog** -- Stdlib structured logging, sufficient for gateway use. No external dependency needed.
 - **YAML: go.yaml.in/yaml/v3 over gopkg.in/yaml.v3** -- Original declared unmaintained April 2025. YAML org fork is drop-in replacement, identical API.
-- **Token counting: pkoukk/tiktoken-go over tiktoken-go/tokenizer** -- More actively maintained (v0.1.8, Sep 2025), downloads/caches BPE vocab files rather than embedding ~4MB in binary.
-- **Rate limiting: x/time/rate over custom** -- Stdlib-adjacent, battle-tested, 0 allocs on Allow(). Per-key wrapping with map+sync.RWMutex is trivial since we already have API key objects.
+- **Token counting: character-based heuristic** -- ~4 chars/token approximation. Simple, zero-alloc, sufficient for rate limiting TPM estimation. Exact BPE tokenizers (tiktoken-go) add ~4MB binary bloat for marginal accuracy gain.
+- **Rate limiting: custom dual token bucket** -- Lazy refill (no background goroutine), RPM converted to per-second rate. Pre-consume estimate, post-adjust actual. Registry with per-key limiters, stale eviction (>1h idle).
 - **Tracing: OTLP exporter over Jaeger** -- Jaeger exporter removed from OTel SDK in 2023. Jaeger v1.35+ accepts OTLP natively. Unsampled spans cost ~10ns.
 - **HTTP client: tuned net/http over fasthttp** -- fasthttp has no HTTP/2, no streaming response bodies, incompatible with otelhttp. Tuned Transport with MaxIdleConnsPerHost=100+ and ForceAttemptHTTP2=true closes the gap.
 - **DNS: rs/dnscache** -- Default net.Resolver does fresh DNS lookup per new connection. dnscache wraps DialContext with configurable refresh interval.
-- **JWT: lestrrat-go/jwx/v2 over coreos/go-oidc and golang-jwt** -- Full JOSE stack with JWKS auto-refresh cache (serves stale on failure). `go-oidc/v3` has a context caching bug (issue #339). `golang-jwt/v5` has no JWKS support at all -- only suitable for issuing tokens, not validating external IdP tokens.
+- **(Future) JWT: lestrrat-go/jwx/v2 over coreos/go-oidc and golang-jwt** -- Full JOSE stack with JWKS auto-refresh cache (serves stale on failure). `go-oidc/v3` has a context caching bug (issue #339). `golang-jwt/v5` has no JWKS support at all -- only suitable for issuing tokens, not validating external IdP tokens.
 
 ## Implementation Phases
 
@@ -759,8 +757,11 @@ Worker framework (`worker/` package: `Worker` interface, `Runner` with errgroup,
 **Phase 4 -- Admin API + Observability + Name/Type Split (DONE):**
 Admin CRUD endpoints (providers, keys, routes), Prometheus metrics with native histograms, OpenTelemetry tracing, usage aggregation. Provider Name/Type split: `Name()` = instance ID (registry key, DB PK), `Type()` = wire format constant. Config `type` defaults to `name` for backward compat. Registry keyed by instance name with `GetByType()` for native list endpoints. Router returns error for unrouted models (no hardcoded fallback).
 
-**Phase 4.5 -- Cloud Hosting Support:**
-Run existing provider types (OpenAI, Anthropic, Gemini) on Azure, AWS Bedrock, and GCP Vertex AI via configurable auth transports and hosting modes. See "Cloud Hosting" section below for full design.
+**Phase 4.5a -- Azure + Vertex Cloud Hosting (DONE):**
+`cloudauth` package with `APIKeyTransport` and `GCPOAuthTransport` (ADC). Azure OpenAI via API key auth (existing OpenAI adapter, just base_url + api_key). Vertex AI for Gemini and Anthropic via GCP OAuth ADC with URL rewriting. `NewWithHosting` constructor for Vertex-hosted adapters. Config: `hosting` ("", "azure", "vertex"), `region`, `project`, `auth` sub-struct with `ResolvedAuthType()` inference. Auth extracted into `http.RoundTripper` decorators -- adapters are unaware of cloud auth.
+
+**Phase 4.5b -- Bedrock Cloud Hosting:**
+AWS Bedrock support for Anthropic models. `AWSSigV4Transport` for request signing. Bedrock hosting mode with URL rewriting and body tweaks. AWS event stream decoding for streaming (binary, not SSE). See "Cloud Hosting" section below for full design.
 
 **Phase 5 -- Enterprise Auth + Multi-Tenancy:**
 JWT/OIDC dual-mode auth (`lestrrat-go/jwx/v2`), multi-tenant org/team hierarchy with limit inheritance, RBAC with permission bitmask, admin endpoints for orgs/teams, auth configuration endpoint.
@@ -846,7 +847,7 @@ type AuthTransport interface {
     http.RoundTripper
 }
 
-// API key (existing behavior, extracted)
+// API key (existing behavior, extracted) -- IMPLEMENTED
 type APIKeyTransport struct {
     Key       string
     HeaderKey string  // "Authorization", "x-api-key", "x-goog-api-key"
@@ -854,17 +855,17 @@ type APIKeyTransport struct {
     Base      http.RoundTripper
 }
 
-// Azure Entra ID -- auto-refreshing OAuth2 token
+// GCP OAuth2 -- auto-refreshing ADC/SA token -- IMPLEMENTED
+// Dep: golang.org/x/oauth2/google
+type GCPOAuthTransport struct { ... }
+
+// Azure Entra ID -- auto-refreshing OAuth2 token (FUTURE)
 // Dep: github.com/Azure/azure-sdk-for-go/sdk/azidentity
 type AzureEntraTransport struct { ... }
 
-// AWS SigV4 -- signs each request
+// AWS SigV4 -- signs each request (FUTURE)
 // Dep: github.com/aws/aws-sdk-go-v2/aws/signer/v4
 type AWSSigV4Transport struct { ... }
-
-// GCP OAuth2 -- auto-refreshing ADC/SA token
-// Dep: golang.org/x/oauth2/google
-type GCPOAuthTransport struct { ... }
 ```
 
 ### Hosting Modes
@@ -878,12 +879,12 @@ Each adapter accepts a `HostingStyle` that adjusts URL construction and body for
 
 ### Implementation Sequence
 
-**Phase 4.5a -- Azure + Vertex (low effort, standard HTTP):**
+**Phase 4.5a -- Azure + Vertex (DONE):**
 1. Multi-instance registry (name/type split from Phase 4)
 2. `cloudauth` package with `APIKeyTransport` and `GCPOAuthTransport`
-3. Hosting mode support in Anthropic and Gemini adapters (URL rewriting, body tweaks for Vertex)
-4. Azure: just base_url + api_key, works immediately with existing OpenAI adapter
-5. `AzureEntraTransport` for Entra ID auth (optional, API key works for most users)
+3. Hosting mode support in Anthropic and Gemini adapters (URL rewriting for Vertex)
+4. Azure: base_url + api_key, works with existing OpenAI adapter
+5. `AzureEntraTransport` for Entra ID auth (future, API key works for most users)
 
 **Phase 4.5b -- Bedrock (heavier, AWS SDK dependency):**
 1. `AWSSigV4Transport` for request signing
@@ -893,13 +894,13 @@ Each adapter accepts a `HostingStyle` that adjusts URL construction and body for
 
 ### Dependencies (Phase 4.5)
 
-| Package | Purpose | Phase |
-|---------|---------|-------|
-| `golang.org/x/oauth2/google` | GCP Application Default Credentials, auto-refreshing token source | 4.5a |
-| `github.com/Azure/azure-sdk-for-go/sdk/azidentity` | Azure DefaultAzureCredential (Entra ID) | 4.5a (optional) |
-| `github.com/aws/aws-sdk-go-v2/config` | AWS default credential chain | 4.5b |
-| `github.com/aws/aws-sdk-go-v2/aws/signer/v4` | SigV4 request signing | 4.5b |
-| `github.com/aws/aws-sdk-go-v2/service/bedrockruntime` | Bedrock InvokeModel + event stream decoding | 4.5b |
+| Package | Purpose | Status |
+|---------|---------|--------|
+| `golang.org/x/oauth2/google` | GCP Application Default Credentials, auto-refreshing token source | Done |
+| `github.com/Azure/azure-sdk-for-go/sdk/azidentity` | Azure DefaultAzureCredential (Entra ID) | Future |
+| `github.com/aws/aws-sdk-go-v2/config` | AWS default credential chain | Future |
+| `github.com/aws/aws-sdk-go-v2/aws/signer/v4` | SigV4 request signing | Future |
+| `github.com/aws/aws-sdk-go-v2/service/bedrockruntime` | Bedrock InvokeModel + event stream decoding | Future |
 
 ## Verification
 

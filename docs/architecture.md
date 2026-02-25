@@ -12,6 +12,7 @@ gandalf/
     errors.go                      # Sentinel errors
     auth/
       apikey.go                    # API key auth: hash -> otter cache -> DB fallback
+      apikey_test.go               # Auth cache, validation, expiry tests
     server/
       server.go                    # New(Deps) http.Handler, route registration (chi), dep interfaces
       admin.go                     # Admin CRUD handlers: providers, keys, routes, cache purge, usage query
@@ -26,6 +27,7 @@ gandalf/
       health.go                    # handleHealthz, handleReadyz
       server_test.go               # Handler tests with inline fakes
       admin_test.go                # Admin CRUD + RBAC enforcement tests
+      cache_test.go                # Cache key generation + cacheability tests
       metrics_test.go              # Prometheus metrics integration tests
       server_bench_test.go         # Benchmarks: ChatCompletion, Stream, Healthz
       native_test.go               # Native passthrough E2E tests: Anthropic, Gemini, Azure, Ollama
@@ -63,7 +65,7 @@ gandalf/
     ratelimit/
       ratelimit.go                 # Dual token bucket (RPM+TPM), Limiter, Registry
       quota.go                     # QuotaTracker: in-memory budget tracking
-      *_test.go
+      ratelimit_test.go, quota_test.go
     cache/
       cache.go                     # Cache interface (Get/Set/Delete/Purge)
       memory.go                    # In-memory W-TinyLFU cache (otter) with per-entry TTL
@@ -77,16 +79,17 @@ gandalf/
       usage_recorder.go            # Buffered channel -> batch DB flush (100 records or 5s)
       usage_rollup.go              # Periodic aggregation of raw usage into hourly rollups
       quota_sync.go                # Periodic quota counter reload from DB (60s)
-      *_test.go
+      runner_test.go, usage_recorder_test.go, usage_rollup_test.go, quota_sync_test.go
     storage/
       storage.go                   # Store interfaces (APIKeyStore, UsageStore, etc.)
       sqlite/
         db.go, apikey.go, provider.go, route.go, org.go, usage.go
         sqlite_test.go
-        migrations/001_init.sql, 002_key_role.sql, 003_usage_rollups.sql
+        migrations/001_init.sql, 002_key_role.sql, 003_usage_rollups.sql, 004_provider_type.sql
     telemetry/
       metrics.go                     # Prometheus Metrics struct + NewMetrics(registerer)
       tracing.go                     # SetupTracing (OTLP gRPC) + Tracer() helper
+      metrics_test.go                # Metrics registration + recording tests
     testutil/
       fake_provider.go             # FakeProvider with configurable callbacks + FakeStreamChan
       fake_store.go                # In-memory FakeStore implementing storage.Store

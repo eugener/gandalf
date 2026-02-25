@@ -10,6 +10,8 @@ make check          # full verification: build + fix + vet + test + govulncheck 
 make lint           # go vet + golangci-lint
 make run            # build and run with example config
 make coverage       # test coverage report
+make clean          # remove bin/ and coverage.out
+make docker         # build Docker image with VERSION tag
 ```
 
 All make targets set `GOEXPERIMENT=jsonv2` for lower alloc counts in JSON-heavy hot paths.
