@@ -13,7 +13,9 @@ type Metrics struct {
 	CacheHits        prometheus.Counter
 	CacheMisses      prometheus.Counter
 	RateLimitRejects *prometheus.CounterVec
-	TokensProcessed  *prometheus.CounterVec
+	TokensProcessed       *prometheus.CounterVec
+	CircuitBreakerState   *prometheus.GaugeVec   // labels: provider, state
+	CircuitBreakerRejects *prometheus.CounterVec  // labels: provider
 }
 
 // NewMetrics creates and registers all metrics with the given registerer.
@@ -63,6 +65,18 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 			Name:      "tokens_processed_total",
 			Help:      "Total tokens processed.",
 		}, []string{"model", "type"}),
+
+		CircuitBreakerState: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Namespace: "gandalf",
+			Name:      "circuit_breaker_state",
+			Help:      "Circuit breaker state per provider (0=closed, 1=open, 2=half_open).",
+		}, []string{"provider"}),
+
+		CircuitBreakerRejects: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Namespace: "gandalf",
+			Name:      "circuit_breaker_rejects_total",
+			Help:      "Total requests rejected by circuit breaker.",
+		}, []string{"provider"}),
 	}
 
 	reg.MustRegister(
@@ -73,6 +87,8 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 		m.CacheMisses,
 		m.RateLimitRejects,
 		m.TokensProcessed,
+		m.CircuitBreakerState,
+		m.CircuitBreakerRejects,
 	)
 
 	return m

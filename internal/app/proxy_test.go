@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	gateway "github.com/eugener/gandalf/internal"
+	"github.com/eugener/gandalf/internal/circuitbreaker"
 	"github.com/eugener/gandalf/internal/provider"
 	"github.com/eugener/gandalf/internal/testutil"
 )
@@ -24,7 +26,7 @@ func TestChatCompletion_PrimarySucceeds(t *testing.T) {
 		Strategy:   "priority",
 	})
 
-	ps := NewProxyService(reg, NewRouterService(store), nil)
+	ps := NewProxyService(reg, NewRouterService(store), nil, nil)
 	resp, err := ps.ChatCompletion(context.Background(), &gateway.ChatRequest{Model: "gpt-4o"})
 	if err != nil {
 		t.Fatalf("ChatCompletion: %v", err)
@@ -59,7 +61,7 @@ func TestChatCompletion_FailoverToSecondary(t *testing.T) {
 		Strategy:   "priority",
 	})
 
-	ps := NewProxyService(reg, NewRouterService(store), nil)
+	ps := NewProxyService(reg, NewRouterService(store), nil, nil)
 	resp, err := ps.ChatCompletion(context.Background(), &gateway.ChatRequest{Model: "model-a"})
 	if err != nil {
 		t.Fatalf("ChatCompletion: %v", err)
@@ -91,7 +93,7 @@ func TestChatCompletion_ClientErrorNoFailover(t *testing.T) {
 		Strategy:   "priority",
 	})
 
-	ps := NewProxyService(reg, NewRouterService(store), nil)
+	ps := NewProxyService(reg, NewRouterService(store), nil, nil)
 	_, err := ps.ChatCompletion(context.Background(), &gateway.ChatRequest{Model: "model-a"})
 	if !errors.Is(err, gateway.ErrBadRequest) {
 		t.Fatalf("expected ErrBadRequest, got: %v", err)
@@ -123,7 +125,7 @@ func TestChatCompletion_AllFail(t *testing.T) {
 		Strategy:   "priority",
 	})
 
-	ps := NewProxyService(reg, NewRouterService(store), nil)
+	ps := NewProxyService(reg, NewRouterService(store), nil, nil)
 	_, err := ps.ChatCompletion(context.Background(), &gateway.ChatRequest{Model: "model-a"})
 	if err == nil {
 		t.Fatal("expected error when all providers fail")
@@ -154,7 +156,7 @@ func TestChatCompletionStream_PrimarySucceeds(t *testing.T) {
 		Strategy:   "priority",
 	})
 
-	ps := NewProxyService(reg, NewRouterService(store), nil)
+	ps := NewProxyService(reg, NewRouterService(store), nil, nil)
 	ch, err := ps.ChatCompletionStream(context.Background(), &gateway.ChatRequest{Model: "gpt-4o"})
 	if err != nil {
 		t.Fatalf("ChatCompletionStream: %v", err)
@@ -190,7 +192,7 @@ func TestChatCompletionStream_FailoverToSecondary(t *testing.T) {
 		Strategy:   "priority",
 	})
 
-	ps := NewProxyService(reg, NewRouterService(store), nil)
+	ps := NewProxyService(reg, NewRouterService(store), nil, nil)
 	ch, err := ps.ChatCompletionStream(context.Background(), &gateway.ChatRequest{Model: "model-a"})
 	if err != nil {
 		t.Fatalf("ChatCompletionStream: %v", err)
@@ -221,7 +223,7 @@ func TestChatCompletionStream_ClientErrorNoFailover(t *testing.T) {
 		Strategy:   "priority",
 	})
 
-	ps := NewProxyService(reg, NewRouterService(store), nil)
+	ps := NewProxyService(reg, NewRouterService(store), nil, nil)
 	_, err := ps.ChatCompletionStream(context.Background(), &gateway.ChatRequest{Model: "model-a"})
 	if !errors.Is(err, gateway.ErrBadRequest) {
 		t.Fatalf("expected ErrBadRequest, got: %v", err)
@@ -253,7 +255,7 @@ func TestChatCompletionStream_AllFail(t *testing.T) {
 		Strategy:   "priority",
 	})
 
-	ps := NewProxyService(reg, NewRouterService(store), nil)
+	ps := NewProxyService(reg, NewRouterService(store), nil, nil)
 	_, err := ps.ChatCompletionStream(context.Background(), &gateway.ChatRequest{Model: "model-a"})
 	if err == nil {
 		t.Fatal("expected error when all providers fail")
@@ -284,7 +286,7 @@ func TestEmbeddings_PrimarySucceeds(t *testing.T) {
 		Strategy:   "priority",
 	})
 
-	ps := NewProxyService(reg, NewRouterService(store), nil)
+	ps := NewProxyService(reg, NewRouterService(store), nil, nil)
 	resp, err := ps.Embeddings(context.Background(), &gateway.EmbeddingRequest{Model: "text-embed"})
 	if err != nil {
 		t.Fatalf("Embeddings: %v", err)
@@ -319,7 +321,7 @@ func TestEmbeddings_FailoverToSecondary(t *testing.T) {
 		Strategy:   "priority",
 	})
 
-	ps := NewProxyService(reg, NewRouterService(store), nil)
+	ps := NewProxyService(reg, NewRouterService(store), nil, nil)
 	resp, err := ps.Embeddings(context.Background(), &gateway.EmbeddingRequest{Model: "text-embed"})
 	if err != nil {
 		t.Fatalf("Embeddings: %v", err)
@@ -349,7 +351,7 @@ func TestEmbeddings_ClientErrorNoFailover(t *testing.T) {
 		Strategy:   "priority",
 	})
 
-	ps := NewProxyService(reg, NewRouterService(store), nil)
+	ps := NewProxyService(reg, NewRouterService(store), nil, nil)
 	_, err := ps.Embeddings(context.Background(), &gateway.EmbeddingRequest{Model: "text-embed"})
 	if !errors.Is(err, gateway.ErrBadRequest) {
 		t.Fatalf("expected ErrBadRequest, got: %v", err)
@@ -381,7 +383,7 @@ func TestEmbeddings_AllFail(t *testing.T) {
 		Strategy:   "priority",
 	})
 
-	ps := NewProxyService(reg, NewRouterService(store), nil)
+	ps := NewProxyService(reg, NewRouterService(store), nil, nil)
 	_, err := ps.Embeddings(context.Background(), &gateway.EmbeddingRequest{Model: "text-embed"})
 	if err == nil {
 		t.Fatal("expected error when all providers fail")
@@ -410,7 +412,7 @@ func TestListModels_AggregatesAllProviders(t *testing.T) {
 		},
 	})
 
-	ps := NewProxyService(reg, NewRouterService(testutil.NewFakeStore()), nil)
+	ps := NewProxyService(reg, NewRouterService(testutil.NewFakeStore()), nil, nil)
 	models, err := ps.ListModels(context.Background())
 	if err != nil {
 		t.Fatalf("ListModels: %v", err)
@@ -443,12 +445,111 @@ func TestListModels_SkipsFailingProvider(t *testing.T) {
 		},
 	})
 
-	ps := NewProxyService(reg, NewRouterService(testutil.NewFakeStore()), nil)
+	ps := NewProxyService(reg, NewRouterService(testutil.NewFakeStore()), nil, nil)
 	models, err := ps.ListModels(context.Background())
 	if err != nil {
 		t.Fatalf("ListModels: %v", err)
 	}
 	if len(models) != 1 || models[0] != "good-model" {
 		t.Errorf("models = %v, want [good-model]", models)
+	}
+}
+
+// --- Circuit Breaker Integration ---
+
+func TestChatCompletion_CircuitBreakerSkipsOpenProvider(t *testing.T) {
+	t.Parallel()
+
+	reg := provider.NewRegistry()
+	reg.Register("bad", &testutil.FakeProvider{
+		ProviderName: "bad",
+		ChatFn: func(context.Context, *gateway.ChatRequest) (*gateway.ChatResponse, error) {
+			return nil, errors.New("should not be called")
+		},
+	})
+	reg.Register("good", &testutil.FakeProvider{
+		ProviderName: "good",
+		ChatFn: func(_ context.Context, req *gateway.ChatRequest) (*gateway.ChatResponse, error) {
+			return &gateway.ChatResponse{ID: "from-good", Model: req.Model}, nil
+		},
+	})
+
+	store := testutil.NewFakeStore()
+	store.AddRoute(&gateway.Route{
+		ID:         "r-1",
+		ModelAlias: "model-a",
+		Targets:    []byte(`[{"provider_id":"bad","model":"model-a","priority":1},{"provider_id":"good","model":"model-a","priority":2}]`),
+		Strategy:   "priority",
+	})
+
+	cbReg := circuitbreaker.NewRegistry(circuitbreaker.Config{
+		ErrorThreshold: 0.30,
+		MinSamples:     5,
+		WindowSeconds:  60,
+		OpenTimeout:    30 * time.Second,
+	})
+
+	// Trip the breaker for "bad" provider.
+	cb := cbReg.GetOrCreate("bad")
+	for range 10 {
+		cb.RecordError(1.0)
+	}
+
+	ps := NewProxyService(reg, NewRouterService(store), nil, cbReg)
+	resp, err := ps.ChatCompletion(context.Background(), &gateway.ChatRequest{Model: "model-a"})
+	if err != nil {
+		t.Fatalf("ChatCompletion: %v", err)
+	}
+	if resp.ID != "from-good" {
+		t.Errorf("id = %q, want from-good (should skip open breaker)", resp.ID)
+	}
+}
+
+func TestChatCompletion_CircuitBreakerRecordsErrors(t *testing.T) {
+	t.Parallel()
+
+	reg := provider.NewRegistry()
+	reg.Register("flaky", &testutil.FakeProvider{
+		ProviderName: "flaky",
+		ChatFn: func(context.Context, *gateway.ChatRequest) (*gateway.ChatResponse, error) {
+			return nil, errors.New("server error")
+		},
+	})
+	reg.Register("backup", &testutil.FakeProvider{
+		ProviderName: "backup",
+		ChatFn: func(_ context.Context, req *gateway.ChatRequest) (*gateway.ChatResponse, error) {
+			return &gateway.ChatResponse{ID: "from-backup", Model: req.Model}, nil
+		},
+	})
+
+	store := testutil.NewFakeStore()
+	store.AddRoute(&gateway.Route{
+		ID:         "r-1",
+		ModelAlias: "model-a",
+		Targets:    []byte(`[{"provider_id":"flaky","model":"model-a","priority":1},{"provider_id":"backup","model":"model-a","priority":2}]`),
+		Strategy:   "priority",
+	})
+
+	cbReg := circuitbreaker.NewRegistry(circuitbreaker.Config{
+		ErrorThreshold: 0.30,
+		MinSamples:     5,
+		WindowSeconds:  60,
+		OpenTimeout:    30 * time.Second,
+	})
+
+	ps := NewProxyService(reg, NewRouterService(store), nil, cbReg)
+
+	// Make enough requests to trip the breaker for "flaky".
+	for range 6 {
+		ps.ChatCompletion(context.Background(), &gateway.ChatRequest{Model: "model-a"})
+	}
+
+	// Breaker for "flaky" should now be open.
+	cb := cbReg.Get("flaky")
+	if cb == nil {
+		t.Fatal("expected breaker for flaky provider")
+	}
+	if cb.State() != circuitbreaker.StateOpen {
+		t.Fatalf("state = %v, want open", cb.State())
 	}
 }

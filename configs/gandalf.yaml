@@ -159,6 +159,13 @@ rate_limits:
   default_rpm: 60     # requests per minute per key (0 = unlimited)
   default_tpm: 100000 # tokens per minute per key (0 = unlimited)
 
+circuit_breaker:
+  enabled: true
+  error_threshold: 0.30  # 30% weighted error rate to trip
+  min_samples: 10        # min requests before CB can open
+  window_seconds: 60     # sliding window duration
+  open_timeout: 30s      # time in OPEN before HALF_OPEN probe
+
 cache:
   enabled: true
   max_size: 10000     # max cached responses

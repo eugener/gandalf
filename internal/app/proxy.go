@@ -11,6 +11,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 
 	gateway "github.com/eugener/gandalf/internal"
+	"github.com/eugener/gandalf/internal/circuitbreaker"
 	"github.com/eugener/gandalf/internal/provider"
 )
 
@@ -21,13 +22,15 @@ import (
 type ProxyService struct {
 	providers *provider.Registry
 	router    *RouterService
-	tracer    trace.Tracer // nil disables tracing (saves ~3.7 allocs/op)
+	tracer    trace.Tracer                // nil disables tracing (saves ~3.7 allocs/op)
+	breakers  *circuitbreaker.Registry    // nil disables circuit breaking
 }
 
 // NewProxyService returns a ProxyService wired to the given provider registry and router.
 // Pass a nil tracer to disable tracing (avoids span/attribute allocations on hot paths).
-func NewProxyService(providers *provider.Registry, router *RouterService, tracer trace.Tracer) *ProxyService {
-	return &ProxyService{providers: providers, router: router, tracer: tracer}
+// Pass a nil breakers registry to disable circuit breaking.
+func NewProxyService(providers *provider.Registry, router *RouterService, tracer trace.Tracer, breakers *circuitbreaker.Registry) *ProxyService {
+	return &ProxyService{providers: providers, router: router, tracer: tracer, breakers: breakers}
 }
 
 // ChatCompletion resolves the requested model to providers via routing rules
@@ -43,6 +46,13 @@ func (ps *ProxyService) ChatCompletion(ctx context.Context, req *gateway.ChatReq
 
 	var lastErr error
 	for _, target := range targets {
+		if ps.breakers != nil {
+			if cb := ps.breakers.Get(target.ProviderID); cb != nil && !cb.Allow() {
+				lastErr = fmt.Errorf("%w: circuit breaker open for %s", gateway.ErrProviderError, target.ProviderID)
+				continue
+			}
+		}
+
 		p, err := ps.providers.Get(target.ProviderID)
 		if err != nil {
 			// Use %w (not %v) to preserve error chain for errors.Is upstream.
@@ -70,12 +80,14 @@ func (ps *ProxyService) ChatCompletion(ctx context.Context, req *gateway.ChatReq
 		req.Model = origModel
 
 		if err != nil {
+			ps.recordBreakerError(target.ProviderID, err)
 			if lastErr, ok := failoverErr(ctx, err, target.ProviderID, "provider failed, trying next"); ok {
 				return nil, lastErr
 			}
 			lastErr = fmt.Errorf("%w: %w", gateway.ErrProviderError, err)
 			continue
 		}
+		ps.recordBreakerSuccess(target.ProviderID)
 		return resp, nil
 	}
 	return nil, lastErr
@@ -91,6 +103,13 @@ func (ps *ProxyService) ChatCompletionStream(ctx context.Context, req *gateway.C
 
 	var lastErr error
 	for _, target := range targets {
+		if ps.breakers != nil {
+			if cb := ps.breakers.Get(target.ProviderID); cb != nil && !cb.Allow() {
+				lastErr = fmt.Errorf("%w: circuit breaker open for %s", gateway.ErrProviderError, target.ProviderID)
+				continue
+			}
+		}
+
 		p, err := ps.providers.Get(target.ProviderID)
 		if err != nil {
 			lastErr = fmt.Errorf("%w: %w", gateway.ErrProviderError, err)
@@ -103,12 +122,14 @@ func (ps *ProxyService) ChatCompletionStream(ctx context.Context, req *gateway.C
 		req.Model = origModel
 
 		if err != nil {
+			ps.recordBreakerError(target.ProviderID, err)
 			if lastErr, ok := failoverErr(ctx, err, target.ProviderID, "provider stream failed, trying next"); ok {
 				return nil, lastErr
 			}
 			lastErr = fmt.Errorf("%w: %w", gateway.ErrProviderError, err)
 			continue
 		}
+		ps.recordBreakerSuccess(target.ProviderID)
 		return ch, nil
 	}
 	return nil, lastErr
@@ -124,6 +145,13 @@ func (ps *ProxyService) Embeddings(ctx context.Context, req *gateway.EmbeddingRe
 
 	var lastErr error
 	for _, target := range targets {
+		if ps.breakers != nil {
+			if cb := ps.breakers.Get(target.ProviderID); cb != nil && !cb.Allow() {
+				lastErr = fmt.Errorf("%w: circuit breaker open for %s", gateway.ErrProviderError, target.ProviderID)
+				continue
+			}
+		}
+
 		p, err := ps.providers.Get(target.ProviderID)
 		if err != nil {
 			lastErr = fmt.Errorf("%w: %w", gateway.ErrProviderError, err)
@@ -136,12 +164,14 @@ func (ps *ProxyService) Embeddings(ctx context.Context, req *gateway.EmbeddingRe
 		req.Model = origModel
 
 		if err != nil {
+			ps.recordBreakerError(target.ProviderID, err)
 			if lastErr, ok := failoverErr(ctx, err, target.ProviderID, "provider embeddings failed, trying next"); ok {
 				return nil, lastErr
 			}
 			lastErr = fmt.Errorf("%w: %w", gateway.ErrProviderError, err)
 			continue
 		}
+		ps.recordBreakerSuccess(target.ProviderID)
 		return resp, nil
 	}
 	return nil, lastErr
@@ -177,6 +207,23 @@ func (ps *ProxyService) ListModels(ctx context.Context) ([]string, error) {
 		all = append(all, models...)
 	}
 	return all, nil
+}
+
+// recordBreakerSuccess records a successful request to the circuit breaker.
+func (ps *ProxyService) recordBreakerSuccess(providerID string) {
+	if ps.breakers != nil {
+		ps.breakers.GetOrCreate(providerID).RecordSuccess()
+	}
+}
+
+// recordBreakerError records a failed request to the circuit breaker.
+func (ps *ProxyService) recordBreakerError(providerID string, err error) {
+	if ps.breakers != nil {
+		weight := circuitbreaker.ClassifyError(err)
+		if weight > 0 {
+			ps.breakers.GetOrCreate(providerID).RecordError(weight)
+		}
+	}
 }
 
 // httpStatusError is an interface for errors that carry an HTTP status code.

@@ -64,8 +64,8 @@ LLM gateway that sits between your applications and LLM providers, adding authen
 - [x] Per-request cost estimation
 - [x] Usage filtering by org, key, model, time range
 
-### Resilience (Planned)
-- [ ] Circuit breaker with weighted failure classification
+### Resilience
+- [x] Circuit breaker with weighted failure classification (sliding window, per-provider)
 - [ ] Exponential backoff with jitter retry strategy
 - [ ] Retry budget (cap retries at 20% of base rate)
 - [ ] Peak EWMA + P2C load balancing
@@ -212,6 +212,7 @@ internal/
   provider/            Registry (keyed by instance name) + adapters (openai, anthropic, gemini, ollama)
   auth/                API key auth with otter cache, per-key roles
   ratelimit/           dual token bucket (RPM+TPM), Registry, QuotaTracker
+  circuitbreaker/      per-provider circuit breaker (sliding window, half-open probe)
   cache/               W-TinyLFU in-memory cache (otter)
   tokencount/          token estimation for TPM rate limiting
   telemetry/           Prometheus metrics, OpenTelemetry tracing

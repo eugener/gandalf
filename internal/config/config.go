@@ -12,15 +12,16 @@ import (
 
 // Config is the top-level gateway configuration.
 type Config struct {
-	Server     ServerConfig     `yaml:"server"`
-	Database   DatabaseConfig   `yaml:"database"`
-	Auth       AuthConfig       `yaml:"auth"`
-	RateLimits RateLimitConfig  `yaml:"rate_limits"`
-	Cache      CacheConfig      `yaml:"cache"`
-	Telemetry  TelemetryConfig  `yaml:"telemetry"`
-	Providers  []ProviderEntry  `yaml:"providers"`
-	Routes     []RouteEntry     `yaml:"routes"`
-	Keys       []KeyEntry       `yaml:"keys"`
+	Server         ServerConfig         `yaml:"server"`
+	Database       DatabaseConfig       `yaml:"database"`
+	Auth           AuthConfig           `yaml:"auth"`
+	RateLimits     RateLimitConfig      `yaml:"rate_limits"`
+	Cache          CacheConfig          `yaml:"cache"`
+	CircuitBreaker CircuitBreakerConfig `yaml:"circuit_breaker"`
+	Telemetry      TelemetryConfig      `yaml:"telemetry"`
+	Providers      []ProviderEntry      `yaml:"providers"`
+	Routes         []RouteEntry         `yaml:"routes"`
+	Keys           []KeyEntry           `yaml:"keys"`
 }
 
 // TelemetryConfig holds observability settings.
@@ -52,6 +53,15 @@ type CacheConfig struct {
 	Enabled    bool          `yaml:"enabled"`
 	MaxSize    int           `yaml:"max_size"`
 	DefaultTTL time.Duration `yaml:"default_ttl"`
+}
+
+// CircuitBreakerConfig holds per-provider circuit breaker settings.
+type CircuitBreakerConfig struct {
+	Enabled        bool          `yaml:"enabled"`
+	ErrorThreshold float64       `yaml:"error_threshold"` // weighted error rate to trip (e.g. 0.30)
+	MinSamples     int           `yaml:"min_samples"`     // min requests before CB can open
+	WindowSeconds  int           `yaml:"window_seconds"`  // sliding window duration
+	OpenTimeout    time.Duration `yaml:"open_timeout"`    // OPEN -> HALF_OPEN transition time
 }
 
 // ServerConfig holds HTTP server settings.

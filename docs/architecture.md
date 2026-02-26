@@ -68,6 +68,11 @@ gandalf/
       ratelimit.go                 # Dual token bucket (RPM+TPM), Limiter, Registry
       quota.go                     # QuotaTracker: in-memory budget tracking
       ratelimit_test.go, quota_test.go
+    circuitbreaker/
+      circuitbreaker.go            # Breaker state machine, SlidingWindow (ring buffer), State
+      registry.go                  # Registry: per-provider breakers, RWMutex, stale eviction
+      classify.go                  # ClassifyError: HTTP status + timeout -> weight
+      circuitbreaker_test.go, registry_test.go, classify_test.go
     cache/
       cache.go                     # Cache interface (Get/Set/Delete/Purge)
       memory.go                    # In-memory W-TinyLFU cache (otter) with per-entry TTL

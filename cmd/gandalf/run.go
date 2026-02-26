@@ -21,6 +21,7 @@ import (
 	gateway "github.com/eugener/gandalf/internal"
 	"github.com/eugener/gandalf/internal/app"
 	"github.com/eugener/gandalf/internal/auth"
+	"github.com/eugener/gandalf/internal/circuitbreaker"
 	"github.com/eugener/gandalf/internal/cache"
 	"github.com/eugener/gandalf/internal/cloudauth"
 	"github.com/eugener/gandalf/internal/config"
@@ -188,7 +189,38 @@ func run(configPath string) error {
 	}
 
 	routerSvc := app.NewRouterService(store)
-	proxySvc := app.NewProxyService(reg, routerSvc, tracer)
+
+	// Circuit breaker.
+	var breakers *circuitbreaker.Registry
+	if cfg.CircuitBreaker.Enabled {
+		cbCfg := circuitbreaker.Config{
+			ErrorThreshold: cfg.CircuitBreaker.ErrorThreshold,
+			MinSamples:     cfg.CircuitBreaker.MinSamples,
+			WindowSeconds:  cfg.CircuitBreaker.WindowSeconds,
+			OpenTimeout:    cfg.CircuitBreaker.OpenTimeout,
+		}
+		if cbCfg.ErrorThreshold == 0 {
+			cbCfg.ErrorThreshold = 0.30
+		}
+		if cbCfg.MinSamples == 0 {
+			cbCfg.MinSamples = 10
+		}
+		if cbCfg.WindowSeconds == 0 {
+			cbCfg.WindowSeconds = 60
+		}
+		if cbCfg.OpenTimeout == 0 {
+			cbCfg.OpenTimeout = 30 * time.Second
+		}
+		breakers = circuitbreaker.NewRegistry(cbCfg)
+		slog.Info("circuit breaker enabled",
+			"threshold", cbCfg.ErrorThreshold,
+			"min_samples", cbCfg.MinSamples,
+			"window_seconds", cbCfg.WindowSeconds,
+			"open_timeout", cbCfg.OpenTimeout,
+		)
+	}
+
+	proxySvc := app.NewProxyService(reg, routerSvc, tracer, breakers)
 	keys := app.NewKeyManager(store)
 
 	// Usage recorder (async batch flush to DB).
@@ -294,6 +326,24 @@ func run(configPath string) error {
 			}
 		}
 	}()
+
+	// Periodic eviction of stale circuit breakers.
+	if breakers != nil {
+		go func() {
+			t := time.NewTicker(10 * time.Minute)
+			defer t.Stop()
+			for {
+				select {
+				case <-workerCtx.Done():
+					return
+				case <-t.C:
+					if n := breakers.EvictStale(time.Now().Add(-1 * time.Hour)); n > 0 {
+						slog.Info("circuit breaker eviction", "evicted", n)
+					}
+				}
+			}
+		}()
+	}
 
 	// Graceful shutdown
 	errCh := make(chan error, 1)

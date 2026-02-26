@@ -513,22 +513,27 @@ For streaming: increment `OutstandingReqs` on stream start, decrement on first t
 
 Priority tiers (primary / fallback / last-resort) handle hard failures without waiting for EWMA to converge.
 
-### Circuit Breaker
+### Circuit Breaker (Implemented)
 
-Per-model with provider-level rollup. Time-based sliding window (60s, 1-second buckets).
+Per-provider circuit breaker with time-based sliding window (60s, 1-second ring buffer). Package: `internal/circuitbreaker/`.
 
 ```
-States: CLOSED -> (error_rate > threshold) -> OPEN -> (timeout) -> HALF_OPEN -> probe
+States: CLOSED -> (error_rate >= threshold) -> OPEN -> (timeout) -> HALF_OPEN -> probe
 
-Model CB threshold:    15% error rate (min 10 samples)
-Provider CB threshold: 30% error rate
+Provider CB threshold: 30% weighted error rate (min 10 samples)
+Open timeout: 30s before half-open probe
+Half-open: 1 probe request; success -> CLOSED, failure -> OPEN
 ```
 
 Failure classification with weighted impact on error rate:
 - **429** (rate limited): weight 0.5 -- provider alive, just busy
-- **500/502** (server error): weight 1.0
+- **500/502/503/504** (server error): weight 1.0
 - **Timeout**: weight 1.5 -- worst signal, held connection and got nothing
 - **400/401/404** (client error): weight 0.0 -- not a provider health signal
+- **Network errors** (non-timeout): weight 1.0
+
+Config: `circuit_breaker.enabled`, `error_threshold`, `min_samples`, `window_seconds`, `open_timeout`.
+Metrics: `gandalf_circuit_breaker_state` (gauge), `gandalf_circuit_breaker_rejects_total` (counter).
 
 ### Retry Strategy
 
@@ -766,8 +771,11 @@ AWS Bedrock support for Anthropic models. `AWSSigV4Transport` for request signin
 **Phase 5 -- Enterprise Auth + Multi-Tenancy:**
 JWT/OIDC dual-mode auth (`lestrrat-go/jwx/v2`), multi-tenant org/team hierarchy with limit inheritance, RBAC with permission bitmask, admin endpoints for orgs/teams, auth configuration endpoint.
 
+**Phase 5.5 -- Circuit Breaker (DONE):**
+Per-provider circuit breaker (`internal/circuitbreaker/`). Sliding window (60s, 1-second ring buffer), weighted failure classification, CLOSED/OPEN/HALF_OPEN states with half-open probe. Integrated into ProxyService failover loops. Prometheus metrics for state and rejects. Config via `circuit_breaker` YAML section.
+
 **Phase 6 -- Advanced:**
-Peak EWMA + P2C load balancing, circuit breaker with weighted failure classification, singleflight request coalescing, SSO/SAML via Dex, mTLS, OPA policy engine, semantic caching, Redis cache backend, Postgres store option.
+Peak EWMA + P2C load balancing, singleflight request coalescing, SSO/SAML via Dex, mTLS, OPA policy engine, semantic caching, Redis cache backend, Postgres store option.
 
 ## Cloud Hosting (Phase 4.5)
 

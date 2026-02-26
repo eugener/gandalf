@@ -20,7 +20,7 @@ All make targets set `GOEXPERIMENT=jsonv2` for lower alloc counts in JSON-heavy 
 
 ## Architecture
 
-Hexagonal architecture. Domain types at `internal/gateway.go`, interfaces at consumer level. Multi-provider support (OpenAI, Anthropic, Gemini, Ollama) with Name/Type split (instance ID vs wire format), priority failover routing, SSE streaming, native API passthrough. Cloud hosting: Azure OpenAI (API key auth), Vertex AI (GCP OAuth ADC) for Gemini/Anthropic, and AWS Bedrock (SigV4) for Anthropic with URL rewriting. Auth extracted into `http.RoundTripper` decorators -- adapters are unaware of cloud auth. Per-key rate limiting, response caching, async usage recording, quota enforcement. Admin CRUD API with RBAC, usage aggregation, Prometheus metrics, OpenTelemetry tracing.
+Hexagonal architecture. Domain types at `internal/gateway.go`, interfaces at consumer level. Multi-provider support (OpenAI, Anthropic, Gemini, Ollama) with Name/Type split (instance ID vs wire format), priority failover routing with per-provider circuit breakers, SSE streaming, native API passthrough. Cloud hosting: Azure OpenAI (API key auth), Vertex AI (GCP OAuth ADC) for Gemini/Anthropic, and AWS Bedrock (SigV4) for Anthropic with URL rewriting. Auth extracted into `http.RoundTripper` decorators -- adapters are unaware of cloud auth. Per-key rate limiting, response caching, async usage recording, quota enforcement. Admin CRUD API with RBAC, usage aggregation, Prometheus metrics, OpenTelemetry tracing.
 
 Key packages:
 - `internal/gateway.go` -- domain types + interfaces (no project imports)
@@ -29,6 +29,7 @@ Key packages:
 - `internal/provider/` -- Registry + adapters (openai, anthropic, gemini, ollama)
 - `internal/cloudauth/` -- `http.RoundTripper` decorators: `APIKeyTransport`, `GCPOAuthTransport` (ADC), `AWSSigV4Transport` (SigV4)
 - `internal/ratelimit/` -- dual token bucket (RPM+TPM), Registry, QuotaTracker
+- `internal/circuitbreaker/` -- per-provider circuit breaker: sliding window error rate, CLOSED/OPEN/HALF_OPEN states, weighted failure classification
 - `internal/cache/` -- Cache interface, otter W-TinyLFU memory implementation
 - `internal/tokencount/` -- token estimation for TPM rate limiting
 - `internal/telemetry/` -- Prometheus metrics (Metrics struct), OpenTelemetry tracing (OTLP gRPC)
