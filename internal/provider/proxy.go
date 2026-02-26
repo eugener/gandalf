@@ -137,8 +137,10 @@ func ForwardRequest(ctx context.Context, client *http.Client, baseURL string,
 		}
 	}
 
-	// Non-streaming: bulk copy.
-	if _, err := io.Copy(w, resp.Body); err != nil {
+	// Non-streaming: bulk copy. Cap at 32 MB to prevent a malicious or
+	// misconfigured upstream from causing unbounded memory allocation.
+	const maxResponseBody = 32 << 20
+	if _, err := io.Copy(w, io.LimitReader(resp.Body, maxResponseBody)); err != nil {
 		return fmt.Errorf("native proxy: copy response: %w", err)
 	}
 	return nil

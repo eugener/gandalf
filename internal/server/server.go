@@ -53,6 +53,8 @@ type Deps struct {
 	TokenCounter TokenCounter         // nil = fixed estimate
 	Cache        Cache                // nil = no caching
 	Quota        QuotaChecker         // nil = no quota enforcement
+	DefaultRPM   int64               // fallback RPM when per-key is 0
+	DefaultTPM   int64               // fallback TPM when per-key is 0
 }
 
 // New creates an http.Handler with all routes and middleware wired.

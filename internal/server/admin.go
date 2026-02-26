@@ -193,6 +193,11 @@ func (s *server) handleCreateKey(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSON(w, r, &req) {
 		return
 	}
+	// Reject unknown roles early to prevent storing invalid data in DB.
+	if req.Role != "" && !gateway.ValidRole(req.Role) {
+		writeJSON(w, http.StatusBadRequest, errorResponse("invalid role"))
+		return
+	}
 	if req.OrgID == "" {
 		identity := gateway.IdentityFromContext(r.Context())
 		req.OrgID = identity.OrgID
@@ -263,7 +268,12 @@ func (s *server) handleUpdateKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Reject unknown roles early to prevent storing invalid data in DB.
 	if update.Role != nil {
+		if !gateway.ValidRole(*update.Role) {
+			writeJSON(w, http.StatusBadRequest, errorResponse("invalid role"))
+			return
+		}
 		existing.Role = *update.Role
 	}
 	if update.AllowedModels != nil {
@@ -393,13 +403,28 @@ func (s *server) handleCachePurge(w http.ResponseWriter, r *http.Request) {
 
 func (s *server) handleQueryUsage(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
+	// Validate RFC3339 upfront: SQLite datetime() silently returns NULL on
+	// malformed strings, producing empty results instead of a clear error.
+	since, until := q.Get("since"), q.Get("until")
+	if since != "" {
+		if _, err := time.Parse(time.RFC3339, since); err != nil {
+			writeJSON(w, http.StatusBadRequest, errorResponse("invalid since format, use RFC3339"))
+			return
+		}
+	}
+	if until != "" {
+		if _, err := time.Parse(time.RFC3339, until); err != nil {
+			writeJSON(w, http.StatusBadRequest, errorResponse("invalid until format, use RFC3339"))
+			return
+		}
+	}
 	offset, limit := parsePagination(r)
 	filter := gateway.UsageFilter{
 		OrgID:  q.Get("org_id"),
 		KeyID:  q.Get("key_id"),
 		Model:  q.Get("model"),
-		Since:  q.Get("since"),
-		Until:  q.Get("until"),
+		Since:  since,
+		Until:  until,
 		Offset: offset,
 		Limit:  limit,
 	}
@@ -420,13 +445,28 @@ func (s *server) handleQueryUsage(w http.ResponseWriter, r *http.Request) {
 
 func (s *server) handleUsageSummary(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
+	// Validate RFC3339 upfront: SQLite datetime() silently returns NULL on
+	// malformed strings, producing empty results instead of a clear error.
+	since, until := q.Get("since"), q.Get("until")
+	if since != "" {
+		if _, err := time.Parse(time.RFC3339, since); err != nil {
+			writeJSON(w, http.StatusBadRequest, errorResponse("invalid since format, use RFC3339"))
+			return
+		}
+	}
+	if until != "" {
+		if _, err := time.Parse(time.RFC3339, until); err != nil {
+			writeJSON(w, http.StatusBadRequest, errorResponse("invalid until format, use RFC3339"))
+			return
+		}
+	}
 	filter := gateway.RollupFilter{
 		OrgID:  q.Get("org_id"),
 		KeyID:  q.Get("key_id"),
 		Model:  q.Get("model"),
 		Period: q.Get("period"),
-		Since:  q.Get("since"),
-		Until:  q.Get("until"),
+		Since:  since,
+		Until:  until,
 	}
 	rollups, err := s.deps.Store.QueryRollups(r.Context(), filter)
 	if err != nil {

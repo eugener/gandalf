@@ -32,6 +32,9 @@ func NewProxyService(providers *provider.Registry, router *RouterService, tracer
 
 // ChatCompletion resolves the requested model to providers via routing rules
 // and forwards the chat completion request with priority failover.
+//
+// The failover loop is inlined (not a generic helper) because Go's generic
+// shape dictionary + closure costs +1 alloc/op on this hot path.
 func (ps *ProxyService) ChatCompletion(ctx context.Context, req *gateway.ChatRequest) (*gateway.ChatResponse, error) {
 	targets, err := ps.router.ResolveModel(ctx, req.Model)
 	if err != nil {
@@ -42,7 +45,8 @@ func (ps *ProxyService) ChatCompletion(ctx context.Context, req *gateway.ChatReq
 	for _, target := range targets {
 		p, err := ps.providers.Get(target.ProviderID)
 		if err != nil {
-			lastErr = fmt.Errorf("%w: %v", gateway.ErrProviderError, err)
+			// Use %w (not %v) to preserve error chain for errors.Is upstream.
+			lastErr = fmt.Errorf("%w: %w", gateway.ErrProviderError, err)
 			continue
 		}
 
@@ -66,14 +70,10 @@ func (ps *ProxyService) ChatCompletion(ctx context.Context, req *gateway.ChatReq
 		req.Model = origModel
 
 		if err != nil {
-			if isClientError(err) {
-				return nil, err
+			if lastErr, ok := failoverErr(ctx, err, target.ProviderID, "provider failed, trying next"); ok {
+				return nil, lastErr
 			}
-			slog.LogAttrs(ctx, slog.LevelWarn, "provider failed, trying next",
-				slog.String("provider", target.ProviderID),
-				slog.String("error", err.Error()),
-			)
-			lastErr = fmt.Errorf("%w: %v", gateway.ErrProviderError, err)
+			lastErr = fmt.Errorf("%w: %w", gateway.ErrProviderError, err)
 			continue
 		}
 		return resp, nil
@@ -93,7 +93,7 @@ func (ps *ProxyService) ChatCompletionStream(ctx context.Context, req *gateway.C
 	for _, target := range targets {
 		p, err := ps.providers.Get(target.ProviderID)
 		if err != nil {
-			lastErr = fmt.Errorf("%w: %v", gateway.ErrProviderError, err)
+			lastErr = fmt.Errorf("%w: %w", gateway.ErrProviderError, err)
 			continue
 		}
 
@@ -101,15 +101,12 @@ func (ps *ProxyService) ChatCompletionStream(ctx context.Context, req *gateway.C
 		req.Model = target.Model
 		ch, err := p.ChatCompletionStream(ctx, req)
 		req.Model = origModel
+
 		if err != nil {
-			if isClientError(err) {
-				return nil, err
+			if lastErr, ok := failoverErr(ctx, err, target.ProviderID, "provider stream failed, trying next"); ok {
+				return nil, lastErr
 			}
-			slog.LogAttrs(ctx, slog.LevelWarn, "provider stream failed, trying next",
-				slog.String("provider", target.ProviderID),
-				slog.String("error", err.Error()),
-			)
-			lastErr = fmt.Errorf("%w: %v", gateway.ErrProviderError, err)
+			lastErr = fmt.Errorf("%w: %w", gateway.ErrProviderError, err)
 			continue
 		}
 		return ch, nil
@@ -129,7 +126,7 @@ func (ps *ProxyService) Embeddings(ctx context.Context, req *gateway.EmbeddingRe
 	for _, target := range targets {
 		p, err := ps.providers.Get(target.ProviderID)
 		if err != nil {
-			lastErr = fmt.Errorf("%w: %v", gateway.ErrProviderError, err)
+			lastErr = fmt.Errorf("%w: %w", gateway.ErrProviderError, err)
 			continue
 		}
 
@@ -137,20 +134,32 @@ func (ps *ProxyService) Embeddings(ctx context.Context, req *gateway.EmbeddingRe
 		req.Model = target.Model
 		resp, err := p.Embeddings(ctx, req)
 		req.Model = origModel
+
 		if err != nil {
-			if isClientError(err) {
-				return nil, err
+			if lastErr, ok := failoverErr(ctx, err, target.ProviderID, "provider embeddings failed, trying next"); ok {
+				return nil, lastErr
 			}
-			slog.LogAttrs(ctx, slog.LevelWarn, "provider embeddings failed, trying next",
-				slog.String("provider", target.ProviderID),
-				slog.String("error", err.Error()),
-			)
-			lastErr = fmt.Errorf("%w: %v", gateway.ErrProviderError, err)
+			lastErr = fmt.Errorf("%w: %w", gateway.ErrProviderError, err)
 			continue
 		}
 		return resp, nil
 	}
 	return nil, lastErr
+}
+
+// failoverErr checks whether err is a client error (non-retriable). If so it
+// returns (err, true). Otherwise it logs a warning and returns ("", false) so
+// the caller continues to the next target. Kept as a helper to avoid repeating
+// the log+check pattern in every failover loop.
+func failoverErr(ctx context.Context, err error, providerID, msg string) (error, bool) {
+	if isClientError(err) {
+		return err, true
+	}
+	slog.LogAttrs(ctx, slog.LevelWarn, msg,
+		slog.String("provider", providerID),
+		slog.String("error", err.Error()),
+	)
+	return nil, false
 }
 
 // ListModels aggregates model lists from all registered providers.

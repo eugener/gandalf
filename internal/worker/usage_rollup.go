@@ -66,6 +66,11 @@ func (w *UsageRollupWorker) rollup(ctx context.Context) {
 	if len(records) == 0 {
 		return
 	}
+	// Warn if query hits the hard limit -- means some records may be missed
+	// in this rollup cycle and will be picked up in the next one.
+	if len(records) == 10_000 {
+		slog.Warn("rollup query hit limit, results may be truncated", "limit", 10_000)
+	}
 
 	// Aggregate by (org_id, key_id, model, hour).
 	type key struct {

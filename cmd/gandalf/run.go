@@ -77,14 +77,8 @@ func run(configPath string) error {
 	}
 
 	// Shared DNS cache for all provider HTTP clients.
+	// The refresh goroutine is started later with workerCtx for clean shutdown.
 	dnsResolver := &dnscache.Resolver{}
-	go func() {
-		t := time.NewTicker(5 * time.Minute)
-		defer t.Stop()
-		for range t.C {
-			dnsResolver.Refresh(true)
-		}
-	}()
 
 	// Register providers
 	reg := provider.NewRegistry()
@@ -251,6 +245,8 @@ func run(configPath string) error {
 		Metrics:        metrics,
 		MetricsHandler: metricsHandler,
 		Tracer:         tracer,
+		DefaultRPM:     cfg.RateLimits.DefaultRPM,
+		DefaultTPM:     cfg.RateLimits.DefaultTPM,
 	})
 
 	srv := &http.Server{
@@ -267,6 +263,20 @@ func run(configPath string) error {
 	workerDone := make(chan error, 1)
 	go func() {
 		workerDone <- runner.Run(workerCtx)
+	}()
+
+	// Periodic DNS cache refresh (tied to workerCtx for clean shutdown).
+	go func() {
+		t := time.NewTicker(5 * time.Minute)
+		defer t.Stop()
+		for {
+			select {
+			case <-workerCtx.Done():
+				return
+			case <-t.C:
+				dnsResolver.Refresh(true)
+			}
+		}
 	}()
 
 	// Periodic eviction of stale rate limiters.

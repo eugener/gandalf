@@ -53,7 +53,8 @@ func (rs *RouterService) ResolveModel(ctx context.Context, model string) ([]Reso
 
 	route, err := rs.routeStore.GetRouteByAlias(ctx, model)
 	if err != nil {
-		return nil, fmt.Errorf("no route configured for model %q", model)
+		// Wrap with %w to preserve original error (e.g. ErrNotFound) for callers.
+		return nil, fmt.Errorf("resolve model %q: %w", model, err)
 	}
 
 	var targets []gateway.RouteTarget
@@ -80,4 +81,14 @@ func (rs *RouterService) ResolveModel(ctx context.Context, model string) ([]Reso
 
 	rs.cache.Set(model, resolved)
 	return resolved, nil
+}
+
+// CacheTTL returns the route-configured cache TTL for a model alias,
+// or 0 if no route or no TTL is configured.
+func (rs *RouterService) CacheTTL(ctx context.Context, model string) time.Duration {
+	route, err := rs.routeStore.GetRouteByAlias(ctx, model)
+	if err != nil || route.CacheTTLs <= 0 {
+		return 0
+	}
+	return time.Duration(route.CacheTTLs) * time.Second
 }

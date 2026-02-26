@@ -13,18 +13,8 @@ import (
 )
 
 // isValidParam checks that s is non-empty and contains only [a-zA-Z0-9._-].
-func isValidParam(s string) bool {
-	if len(s) == 0 || len(s) > maxRequestIDLen {
-		return false
-	}
-	for i := 0; i < len(s); i++ {
-		c := s[i]
-		if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '.' || c == '_' || c == '-') {
-			return false
-		}
-	}
-	return true
-}
+// Delegates to isValidToken to DRY the byte-loop validation.
+func isValidParam(s string) bool { return isValidToken(s, maxRequestIDLen) }
 
 // mountNativeRoutes registers native API passthrough routes on the given router.
 // Each format group uses normalizeAuth to map provider-specific auth headers
@@ -134,12 +124,18 @@ func (s *server) handleNativeProxy(providerType string,
 	modelFunc func(*http.Request, []byte) string) http.HandlerFunc {
 
 	return func(w http.ResponseWriter, r *http.Request) {
-		// Read body for model extraction (capped at 4 MB).
-		body, err := io.ReadAll(io.LimitReader(r.Body, 4<<20))
-		if err != nil {
+		// Read body for model extraction. Uses MaxBytesReader + bodyPool
+		// (consistent with decodeRequestBody) instead of unbounded io.ReadAll.
+		r.Body = http.MaxBytesReader(w, r.Body, maxRequestBody)
+		buf := bodyPool.Get().(*bytes.Buffer)
+		buf.Reset()
+		if _, err := buf.ReadFrom(r.Body); err != nil {
+			bodyPool.Put(buf)
 			writeJSON(w, http.StatusBadRequest, errorResponse("failed to read request body"))
 			return
 		}
+		body := bytes.Clone(buf.Bytes())
+		bodyPool.Put(buf)
 
 		model := modelFunc(r, body)
 		if model == "" {
@@ -191,7 +187,13 @@ func (s *server) handleNativeProxy(providerType string,
 			return
 		}
 
-		writeJSON(w, http.StatusBadGateway, errorResponse("no "+providerType+" provider available for model: "+model))
+		// Log details server-side; return generic message to client to avoid
+		// leaking provider topology (which types/models are configured).
+		slog.LogAttrs(r.Context(), slog.LevelWarn, "no provider for native proxy",
+			slog.String("type", providerType),
+			slog.String("model", model),
+		)
+		writeJSON(w, http.StatusBadGateway, errorResponse("no matching provider available"))
 	}
 }
 

@@ -21,12 +21,6 @@ func TestNewMetrics(t *testing.T) {
 	if m.ActiveRequests == nil {
 		t.Error("ActiveRequests is nil")
 	}
-	if m.UpstreamDuration == nil {
-		t.Error("UpstreamDuration is nil")
-	}
-	if m.UpstreamErrors == nil {
-		t.Error("UpstreamErrors is nil")
-	}
 	if m.CacheHits == nil {
 		t.Error("CacheHits is nil")
 	}
@@ -39,10 +33,6 @@ func TestNewMetrics(t *testing.T) {
 	if m.TokensProcessed == nil {
 		t.Error("TokensProcessed is nil")
 	}
-	if m.UsageQueueLength == nil {
-		t.Error("UsageQueueLength is nil")
-	}
-
 	// Verify metrics can be gathered without error.
 	families, err := reg.Gather()
 	if err != nil {

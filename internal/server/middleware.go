@@ -88,10 +88,11 @@ func (s *server) requestID(next http.Handler) http.Handler {
 	})
 }
 
-// isValidRequestID checks that s is non-empty, at most maxRequestIDLen chars,
-// and contains only [a-zA-Z0-9._-]. Iterates bytes without allocation.
-func isValidRequestID(s string) bool {
-	if len(s) == 0 || len(s) > maxRequestIDLen {
+// isValidToken checks that s is non-empty, at most maxLen chars, and contains
+// only [a-zA-Z0-9._-]. Shared by isValidRequestID and isValidParam to DRY
+// the identical byte-loop validation that was duplicated in both.
+func isValidToken(s string, maxLen int) bool {
+	if len(s) == 0 || len(s) > maxLen {
 		return false
 	}
 	for i := 0; i < len(s); i++ {
@@ -102,6 +103,9 @@ func isValidRequestID(s string) bool {
 	}
 	return true
 }
+
+// isValidRequestID checks that s is a valid request ID (max 128 chars, [a-zA-Z0-9._-]).
+func isValidRequestID(s string) bool { return isValidToken(s, maxRequestIDLen) }
 
 // logging logs each request with method, path, status, and duration.
 func (s *server) logging(next http.Handler) http.Handler {
@@ -209,7 +213,15 @@ func (s *server) rateLimit(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
+		// Fall back to config-level defaults so keys without explicit limits
+		// still get rate-limited when global defaults are configured.
 		limits := ratelimit.Limits{RPM: identity.RPMLimit, TPM: identity.TPMLimit}
+		if limits.RPM == 0 {
+			limits.RPM = s.deps.DefaultRPM
+		}
+		if limits.TPM == 0 {
+			limits.TPM = s.deps.DefaultTPM
+		}
 		if limits.RPM == 0 && limits.TPM == 0 {
 			next.ServeHTTP(w, r)
 			return

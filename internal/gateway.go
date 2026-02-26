@@ -204,6 +204,12 @@ func (id *Identity) IsModelAllowed(model string) bool {
 	return slices.Contains(id.AllowedModels, model)
 }
 
+// ValidRole reports whether role is a known role name.
+func ValidRole(role string) bool {
+	_, ok := RolePermissions[role]
+	return ok
+}
+
 // RolePermissions maps role names to their permission bitmasks.
 var RolePermissions = map[string]Permission{
 	"admin":           PermUseModels | PermManageOwnKeys | PermViewOwnUsage | PermViewAllUsage | PermManageAllKeys | PermManageProviders | PermManageRoutes | PermManageOrgs,

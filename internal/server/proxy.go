@@ -21,23 +21,38 @@ var bodyPool = sync.Pool{New: func() any { return new(bytes.Buffer) }}
 // maxRequestBody is the maximum allowed request body size (4 MB).
 const maxRequestBody = 4 << 20
 
-func (s *server) handleChatCompletion(w http.ResponseWriter, r *http.Request) {
+// decodeRequestBody reads the request body via bodyPool, unmarshals JSON into
+// v, and returns false (writing a 400) on error. Parse errors are logged
+// server-side; clients receive a static message to avoid leaking internals.
+//
+// Uses concrete any parameter instead of generics: Go's generic shape
+// dictionary adds +1 alloc/op from interface boxing on every call.
+func decodeRequestBody(w http.ResponseWriter, r *http.Request, v any) bool {
 	r.Body = http.MaxBytesReader(w, r.Body, maxRequestBody)
 	buf := bodyPool.Get().(*bytes.Buffer)
 	buf.Reset()
-	_, err := buf.ReadFrom(r.Body)
-	if err != nil {
+	if _, err := buf.ReadFrom(r.Body); err != nil {
 		bodyPool.Put(buf)
-		writeJSON(w, http.StatusBadRequest, errorResponse("invalid request body: "+err.Error()))
-		return
+		writeJSON(w, http.StatusBadRequest, errorResponse("invalid request body"))
+		return false
 	}
-	var req gateway.ChatRequest
-	if err := json.Unmarshal(buf.Bytes(), &req); err != nil {
+	if err := json.Unmarshal(buf.Bytes(), v); err != nil {
 		bodyPool.Put(buf)
-		writeJSON(w, http.StatusBadRequest, errorResponse("invalid request body: "+err.Error()))
-		return
+		slog.LogAttrs(r.Context(), slog.LevelWarn, "request decode error",
+			slog.String("error", err.Error()),
+		)
+		writeJSON(w, http.StatusBadRequest, errorResponse("invalid request body"))
+		return false
 	}
 	bodyPool.Put(buf)
+	return true
+}
+
+func (s *server) handleChatCompletion(w http.ResponseWriter, r *http.Request) {
+	var req gateway.ChatRequest
+	if !decodeRequestBody(w, r, &req) {
+		return
+	}
 
 	// Model allowlist check.
 	identity := gateway.IdentityFromContext(r.Context())
@@ -56,8 +71,9 @@ func (s *server) handleChatCompletion(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Cache check (non-streaming only).
-	if !req.Stream && s.deps.Cache != nil && isCacheable(&req) {
+	// Cache check (non-streaming only). Guard identity != nil to prevent
+	// nil-pointer dereference when auth middleware is bypassed (e.g. tests).
+	if !req.Stream && s.deps.Cache != nil && identity != nil && isCacheable(&req) {
 		key := cacheKey(identity.KeyID, &req)
 		if data, ok := s.deps.Cache.Get(r.Context(), key); ok {
 			if s.deps.Metrics != nil {
@@ -90,9 +106,9 @@ func (s *server) handleChatCompletion(w http.ResponseWriter, r *http.Request) {
 	s.adjustTPM(identity, estimated, resp.Usage)
 
 	// Cache store.
-	if s.deps.Cache != nil && isCacheable(&req) {
+	if s.deps.Cache != nil && identity != nil && isCacheable(&req) {
 		if data, err := json.Marshal(resp); err == nil {
-			s.deps.Cache.Set(r.Context(), cacheKey(identity.KeyID, &req), data, s.cacheTTL(&req))
+			s.deps.Cache.Set(r.Context(), cacheKey(identity.KeyID, &req), data, s.cacheTTL(r.Context(), &req))
 		}
 	}
 
@@ -131,33 +147,10 @@ func (s *server) handleChatCompletionStream(w http.ResponseWriter, r *http.Reque
 		// Fast path: drain channel without ticker select when possible.
 		if keepAlive == nil {
 			select {
-			case chunk, ok := <-ch:
-				if !ok {
-					writeSSEDone(w)
-					flusher.Flush()
-					s.finishStream(r, req, identity, estimated, usage, start)
+			case chunk, chOpen := <-ch:
+				if usage, ok = s.processStreamChunk(w, flusher, r, chunk, chOpen, req, identity, estimated, usage, start); !ok {
 					return
 				}
-				if chunk.Err != nil {
-					slog.LogAttrs(r.Context(), slog.LevelError, "stream error",
-						slog.String("error", chunk.Err.Error()),
-					)
-					writeSSEDone(w)
-					flusher.Flush()
-					s.finishStream(r, req, identity, estimated, usage, start)
-					return
-				}
-				if chunk.Usage != nil {
-					usage = chunk.Usage
-				}
-				if chunk.Done {
-					writeSSEDone(w)
-					flusher.Flush()
-					s.finishStream(r, req, identity, estimated, usage, start)
-					return
-				}
-				writeSSEData(w, chunk.Data)
-				flusher.Flush()
 				// First data chunk sent; start keep-alive for long streams.
 				keepAlive = time.NewTicker(15 * time.Second)
 			case <-r.Context().Done():
@@ -167,42 +160,56 @@ func (s *server) handleChatCompletionStream(w http.ResponseWriter, r *http.Reque
 		}
 
 		select {
-		case chunk, ok := <-ch:
-			if !ok {
-				writeSSEDone(w)
-				flusher.Flush()
-				s.finishStream(r, req, identity, estimated, usage, start)
+		case chunk, chOpen := <-ch:
+			if usage, ok = s.processStreamChunk(w, flusher, r, chunk, chOpen, req, identity, estimated, usage, start); !ok {
 				return
 			}
-			if chunk.Err != nil {
-				slog.LogAttrs(r.Context(), slog.LevelError, "stream error",
-					slog.String("error", chunk.Err.Error()),
-				)
-				writeSSEDone(w)
-				flusher.Flush()
-				s.finishStream(r, req, identity, estimated, usage, start)
-				return
-			}
-			if chunk.Usage != nil {
-				usage = chunk.Usage
-			}
-			if chunk.Done {
-				writeSSEDone(w)
-				flusher.Flush()
-				s.finishStream(r, req, identity, estimated, usage, start)
-				return
-			}
-			writeSSEData(w, chunk.Data)
-			flusher.Flush()
-
 		case <-keepAlive.C:
 			writeSSEKeepAlive(w)
 			flusher.Flush()
-
 		case <-r.Context().Done():
 			return
 		}
 	}
+}
+
+// processStreamChunk handles a single chunk from the stream channel.
+// Returns updated usage and true to continue, or false if the stream ended.
+// Extracted from inline select branches to DRY the fast-path and keep-alive
+// loops without closures (which would add +1 alloc/op).
+func (s *server) processStreamChunk(
+	w http.ResponseWriter, flusher http.Flusher, r *http.Request,
+	chunk gateway.StreamChunk, chOpen bool,
+	req *gateway.ChatRequest, identity *gateway.Identity, estimated int64,
+	usage *gateway.Usage, start time.Time,
+) (*gateway.Usage, bool) {
+	if !chOpen {
+		writeSSEDone(w)
+		flusher.Flush()
+		s.finishStream(r, req, identity, estimated, usage, start)
+		return usage, false
+	}
+	if chunk.Err != nil {
+		slog.LogAttrs(r.Context(), slog.LevelError, "stream error",
+			slog.String("error", chunk.Err.Error()),
+		)
+		writeSSEDone(w)
+		flusher.Flush()
+		s.finishStream(r, req, identity, estimated, usage, start)
+		return usage, false
+	}
+	if chunk.Usage != nil {
+		usage = chunk.Usage
+	}
+	if chunk.Done {
+		writeSSEDone(w)
+		flusher.Flush()
+		s.finishStream(r, req, identity, estimated, usage, start)
+		return usage, false
+	}
+	writeSSEData(w, chunk.Data)
+	flusher.Flush()
+	return usage, true
 }
 
 // finishStream adjusts TPM and records usage after stream completion.
@@ -211,12 +218,21 @@ func (s *server) finishStream(r *http.Request, req *gateway.ChatRequest, identit
 	s.recordUsage(r, identity, req.Model, usage, time.Since(start), false)
 }
 
-// getLimiter returns the rate limiter for the identity, or nil if not configured.
+// getLimiter returns the rate limiter for the identity, applying default
+// RPM/TPM from config when per-key limits are zero.
 func (s *server) getLimiter(id *gateway.Identity) *ratelimit.Limiter {
 	if s.deps.RateLimiter == nil || id == nil || id.KeyID == "" {
 		return nil
 	}
+	// Fall back to config-level defaults so keys without explicit limits
+	// still get rate-limited when global defaults are configured.
 	limits := ratelimit.Limits{RPM: id.RPMLimit, TPM: id.TPMLimit}
+	if limits.RPM == 0 {
+		limits.RPM = s.deps.DefaultRPM
+	}
+	if limits.TPM == 0 {
+		limits.TPM = s.deps.DefaultTPM
+	}
 	if limits.RPM == 0 && limits.TPM == 0 {
 		return nil
 	}
@@ -249,9 +265,7 @@ func (s *server) adjustTPM(identity *gateway.Identity, estimated int64, usage *g
 	}
 }
 
-// recordUsage sends a usage record to the async recorder.
-// Identity is passed directly to avoid a redundant context lookup.
-// The record ID is assigned by the UsageRecorder worker during flush.
+// recordUsage sends a usage record to the async recorder and updates token metrics.
 func (s *server) recordUsage(r *http.Request, identity *gateway.Identity, model string, usage *gateway.Usage, elapsed time.Duration, cached bool) {
 	if s.deps.Usage == nil {
 		return
@@ -274,6 +288,12 @@ func (s *server) recordUsage(r *http.Request, identity *gateway.Identity, model 
 		rec.PromptTokens = usage.PromptTokens
 		rec.CompletionTokens = usage.CompletionTokens
 		rec.TotalTokens = usage.TotalTokens
+		// Wire TokensProcessed Prometheus counter so grafana dashboards
+		// can track prompt vs completion token volume per model.
+		if s.deps.Metrics != nil {
+			s.deps.Metrics.TokensProcessed.WithLabelValues(model, "prompt").Add(float64(usage.PromptTokens))
+			s.deps.Metrics.TokensProcessed.WithLabelValues(model, "completion").Add(float64(usage.CompletionTokens))
+		}
 	}
 	// Quota consumption.
 	if s.deps.Quota != nil && identity != nil && identity.MaxBudget > 0 && usage != nil {
@@ -284,9 +304,14 @@ func (s *server) recordUsage(r *http.Request, identity *gateway.Identity, model 
 	s.deps.Usage.Record(rec)
 }
 
-// cacheTTL returns the cache TTL for a request, checking route config or falling back to default.
-func (s *server) cacheTTL(req *gateway.ChatRequest) time.Duration {
-	// Default 5 minutes; route-level TTL would be resolved here in the future.
+// cacheTTL returns the cache TTL for a request. Checks route-level
+// cache_ttl_s first (allows per-model TTL tuning), falls back to 5m default.
+func (s *server) cacheTTL(ctx context.Context, req *gateway.ChatRequest) time.Duration {
+	if s.deps.Router != nil {
+		if ttl := s.deps.Router.CacheTTL(ctx, req.Model); ttl > 0 {
+			return ttl
+		}
+	}
 	return 5 * time.Minute
 }
 

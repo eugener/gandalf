@@ -1,8 +1,6 @@
 package server
 
 import (
-	"bytes"
-	"encoding/json"
 	"net/http"
 	"time"
 
@@ -11,22 +9,10 @@ import (
 
 // handleEmbeddings decodes an embedding request and forwards it to the proxy.
 func (s *server) handleEmbeddings(w http.ResponseWriter, r *http.Request) {
-	r.Body = http.MaxBytesReader(w, r.Body, maxRequestBody)
-	buf := bodyPool.Get().(*bytes.Buffer)
-	buf.Reset()
-	_, err := buf.ReadFrom(r.Body)
-	if err != nil {
-		bodyPool.Put(buf)
-		writeJSON(w, http.StatusBadRequest, errorResponse("invalid request body: "+err.Error()))
-		return
-	}
 	var req gateway.EmbeddingRequest
-	if err := json.Unmarshal(buf.Bytes(), &req); err != nil {
-		bodyPool.Put(buf)
-		writeJSON(w, http.StatusBadRequest, errorResponse("invalid request body: "+err.Error()))
+	if !decodeRequestBody(w, r, &req) {
 		return
 	}
-	bodyPool.Put(buf)
 
 	// Model allowlist check.
 	identity := gateway.IdentityFromContext(r.Context())

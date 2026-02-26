@@ -85,23 +85,27 @@ func cacheKey(keyID string, req *gateway.ChatRequest) string {
 	return hex.EncodeToString(h[:])
 }
 
-func normalizeMessages(msgs []gateway.Message) []map[string]any {
-	out := make([]map[string]any, len(msgs))
+// stableMessage is a struct-based representation of a chat message for cache
+// key computation. Struct fields marshal in declaration order, avoiding the
+// non-deterministic map iteration that caused cache key instability.
+type stableMessage struct {
+	Role       string          `json:"role"`
+	Content    json.RawMessage `json:"content"`
+	Name       string          `json:"name,omitempty"`
+	ToolCalls  json.RawMessage `json:"tool_calls,omitempty"`
+	ToolCallID string          `json:"tool_call_id,omitempty"`
+}
+
+func normalizeMessages(msgs []gateway.Message) []stableMessage {
+	out := make([]stableMessage, len(msgs))
 	for i, m := range msgs {
-		nm := map[string]any{
-			"role":    m.Role,
-			"content": json.RawMessage(m.Content),
+		out[i] = stableMessage{
+			Role:       m.Role,
+			Content:    m.Content,
+			Name:       m.Name,
+			ToolCalls:  m.ToolCalls,
+			ToolCallID: m.ToolCallID,
 		}
-		if m.Name != "" {
-			nm["name"] = m.Name
-		}
-		if len(m.ToolCalls) > 0 {
-			nm["tool_calls"] = json.RawMessage(m.ToolCalls)
-		}
-		if m.ToolCallID != "" {
-			nm["tool_call_id"] = m.ToolCallID
-		}
-		out[i] = nm
 	}
 	return out
 }
