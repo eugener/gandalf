@@ -100,6 +100,27 @@ func (s *Store) DeleteKey(ctx context.Context, id string) error {
 	return checkRowsAffected(result, "api key")
 }
 
+// ListBudgetedKeyIDs returns a map of key ID to max_budget for keys with budgets > 0.
+func (s *Store) ListBudgetedKeyIDs(ctx context.Context) (map[string]float64, error) {
+	rows, err := s.read.QueryContext(ctx,
+		`SELECT id, max_budget FROM api_keys WHERE max_budget > 0`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := make(map[string]float64)
+	for rows.Next() {
+		var id string
+		var budget float64
+		if err := rows.Scan(&id, &budget); err != nil {
+			return nil, err
+		}
+		out[id] = budget
+	}
+	return out, rows.Err()
+}
+
 // TouchKeyUsed updates the last_used_at timestamp.
 func (s *Store) TouchKeyUsed(ctx context.Context, id string) error {
 	_, err := s.write.ExecContext(ctx,

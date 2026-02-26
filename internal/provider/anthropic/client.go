@@ -174,6 +174,9 @@ func (c *Client) HealthCheck(ctx context.Context) error {
 		return fmt.Errorf("anthropic: health check: %w", err)
 	}
 	resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		return fmt.Errorf("anthropic: health check: HTTP %d", resp.StatusCode)
+	}
 	return nil
 }
 

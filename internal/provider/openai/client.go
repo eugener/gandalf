@@ -220,6 +220,9 @@ func (c *Client) HealthCheck(ctx context.Context) error {
 			return fmt.Errorf("openai: health check: %w", err)
 		}
 		resp.Body.Close()
+		if resp.StatusCode >= 400 {
+			return fmt.Errorf("openai: health check: HTTP %d", resp.StatusCode)
+		}
 		return nil
 	}
 	_, err := c.ListModels(ctx)

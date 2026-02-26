@@ -8,6 +8,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"strings"
@@ -140,8 +141,20 @@ func ForwardRequest(ctx context.Context, client *http.Client, baseURL string,
 	// Non-streaming: bulk copy. Cap at 32 MB to prevent a malicious or
 	// misconfigured upstream from causing unbounded memory allocation.
 	const maxResponseBody = 32 << 20
-	if _, err := io.Copy(w, io.LimitReader(resp.Body, maxResponseBody)); err != nil {
+	limited := io.LimitReader(resp.Body, maxResponseBody)
+	if _, err := io.Copy(w, limited); err != nil {
 		return fmt.Errorf("native proxy: copy response: %w", err)
 	}
+
+	// Detect truncation: if there's more data beyond the limit, log a warning.
+	// Response is already partially written so we can't change the HTTP status.
+	var probe [1]byte
+	if n, _ := resp.Body.Read(probe[:]); n > 0 {
+		slog.Warn("native proxy: response truncated at 32MB limit",
+			"upstream_url", targetURL,
+			"status", resp.StatusCode,
+		)
+	}
+
 	return nil
 }

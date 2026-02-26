@@ -107,6 +107,7 @@ func (s *FakeStore) CountKeys(context.Context, string) (int, error)             
 func (s *FakeStore) UpdateKey(context.Context, *gateway.APIKey) error                         { return nil }
 func (s *FakeStore) DeleteKey(context.Context, string) error                                  { return nil }
 func (s *FakeStore) TouchKeyUsed(context.Context, string) error                               { return nil }
+func (s *FakeStore) ListBudgetedKeyIDs(context.Context) (map[string]float64, error)           { return nil, nil }
 func (s *FakeStore) CreateProvider(context.Context, *gateway.ProviderConfig) error            { return nil }
 func (s *FakeStore) GetProvider(context.Context, string) (*gateway.ProviderConfig, error)     { return nil, gateway.ErrNotFound }
 func (s *FakeStore) ListProviders(context.Context) ([]*gateway.ProviderConfig, error)         { return nil, nil }

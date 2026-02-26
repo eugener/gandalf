@@ -44,6 +44,16 @@ func writeSSEDone(w http.ResponseWriter) {
 	w.Write(sseDone)
 }
 
+// writeSSEError writes an SSE error event to signal a stream failure to the client.
+// Format: "event: error\ndata: {"error":{"message":"...","type":"stream_error"}}\n\n"
+func writeSSEError(w http.ResponseWriter, msg string) {
+	w.Write([]byte("event: error\ndata: "))
+	w.Write([]byte(`{"error":{"message":"`))
+	w.Write([]byte(msg))
+	w.Write([]byte(`","type":"stream_error"}}`))
+	w.Write(sseNewline)
+}
+
 // writeSSEKeepAlive writes an SSE comment to keep the connection alive.
 func writeSSEKeepAlive(w http.ResponseWriter) {
 	w.Write(sseKeepAlive)

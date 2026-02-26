@@ -193,9 +193,10 @@ func (s *server) processStreamChunk(
 		slog.LogAttrs(r.Context(), slog.LevelError, "stream error",
 			slog.String("error", chunk.Err.Error()),
 		)
+		writeSSEError(w, "upstream stream error")
 		writeSSEDone(w)
 		flusher.Flush()
-		s.finishStream(r, req, identity, estimated, usage, start)
+		s.finishStreamError(r, req, identity, estimated, usage, start)
 		return usage, false
 	}
 	if chunk.Usage != nil {
@@ -216,6 +217,12 @@ func (s *server) processStreamChunk(
 func (s *server) finishStream(r *http.Request, req *gateway.ChatRequest, identity *gateway.Identity, estimated int64, usage *gateway.Usage, start time.Time) {
 	s.adjustTPM(identity, estimated, usage)
 	s.recordUsage(r, identity, req.Model, usage, time.Since(start), false)
+}
+
+// finishStreamError adjusts TPM and records usage with 502 status on stream error.
+func (s *server) finishStreamError(r *http.Request, req *gateway.ChatRequest, identity *gateway.Identity, estimated int64, usage *gateway.Usage, start time.Time) {
+	s.adjustTPM(identity, estimated, usage)
+	s.recordUsageWithStatus(r, identity, req.Model, usage, time.Since(start), http.StatusBadGateway)
 }
 
 // getLimiter returns the rate limiter for the identity, applying default
@@ -263,6 +270,41 @@ func (s *server) adjustTPM(identity *gateway.Identity, estimated int64, usage *g
 	if limiter := s.getLimiter(identity); limiter != nil {
 		limiter.AdjustTPM(estimated - int64(usage.TotalTokens))
 	}
+}
+
+// recordUsageWithStatus sends a usage record with a custom HTTP status code.
+func (s *server) recordUsageWithStatus(r *http.Request, identity *gateway.Identity, model string, usage *gateway.Usage, elapsed time.Duration, status int) {
+	if s.deps.Usage == nil {
+		return
+	}
+	rec := gateway.UsageRecord{
+		Model:      model,
+		LatencyMs:  int(elapsed.Milliseconds()),
+		StatusCode: status,
+		RequestID:  gateway.RequestIDFromContext(r.Context()),
+		CreatedAt:  time.Now(),
+	}
+	if identity != nil {
+		rec.KeyID = identity.KeyID
+		rec.UserID = identity.UserID
+		rec.TeamID = identity.TeamID
+		rec.OrgID = identity.OrgID
+	}
+	if usage != nil {
+		rec.PromptTokens = usage.PromptTokens
+		rec.CompletionTokens = usage.CompletionTokens
+		rec.TotalTokens = usage.TotalTokens
+		if s.deps.Metrics != nil {
+			s.deps.Metrics.TokensProcessed.WithLabelValues(model, "prompt").Add(float64(usage.PromptTokens))
+			s.deps.Metrics.TokensProcessed.WithLabelValues(model, "completion").Add(float64(usage.CompletionTokens))
+		}
+	}
+	if s.deps.Quota != nil && identity != nil && identity.MaxBudget > 0 && usage != nil {
+		cost := estimateCost(model, usage)
+		rec.CostUSD = cost
+		s.deps.Quota.Consume(identity.KeyID, cost)
+	}
+	s.deps.Usage.Record(rec)
 }
 
 // recordUsage sends a usage record to the async recorder and updates token metrics.

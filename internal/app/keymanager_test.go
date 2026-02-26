@@ -45,7 +45,8 @@ func (s *fakeKeyStore) DeleteKey(ctx context.Context, id string) error {
 	s.deleted = id
 	return nil
 }
-func (s *fakeKeyStore) TouchKeyUsed(context.Context, string) error { return nil }
+func (s *fakeKeyStore) TouchKeyUsed(context.Context, string) error                     { return nil }
+func (s *fakeKeyStore) ListBudgetedKeyIDs(context.Context) (map[string]float64, error) { return nil, nil }
 
 func TestCreateKey(t *testing.T) {
 	t.Parallel()

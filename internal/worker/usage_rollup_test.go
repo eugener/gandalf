@@ -34,8 +34,23 @@ func (s *fakeRollupStore) QueryUsage(_ context.Context, f gateway.UsageFilter) (
 
 func (s *fakeRollupStore) UpsertRollup(_ context.Context, rollups []gateway.UsageRollup) error {
 	s.mu.Lock()
-	s.rollups = append(s.rollups, rollups...)
-	s.mu.Unlock()
+	defer s.mu.Unlock()
+	for _, r := range rollups {
+		found := false
+		for i := range s.rollups {
+			e := &s.rollups[i]
+			if e.OrgID == r.OrgID && e.KeyID == r.KeyID && e.Model == r.Model &&
+				e.Period == r.Period && e.Bucket == r.Bucket {
+				// Replace (not accumulate) -- mirrors the fixed SQL upsert.
+				*e = r
+				found = true
+				break
+			}
+		}
+		if !found {
+			s.rollups = append(s.rollups, r)
+		}
+	}
 	return nil
 }
 
@@ -100,6 +115,45 @@ func TestUsageRollupWorker(t *testing.T) {
 	}
 	if k1Rollup.Period != "hourly" {
 		t.Errorf("period = %q, want hourly", k1Rollup.Period)
+	}
+}
+
+func TestUsageRollupWorker_RepeatedRollupNoDuplication(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now().UTC().Truncate(time.Hour)
+	store := &fakeRollupStore{
+		records: []gateway.UsageRecord{
+			{
+				ID: "u1", KeyID: "k1", OrgID: "org1", Model: "gpt-4o",
+				PromptTokens: 10, CompletionTokens: 5, TotalTokens: 15,
+				CostUSD: 0.01, CreatedAt: now.Add(-30 * time.Minute),
+			},
+		},
+	}
+
+	w := NewUsageRollupWorker(store)
+
+	// Run rollup multiple times on the same data (simulates repeated 5-min cycles).
+	for range 5 {
+		w.rollup(context.Background())
+	}
+
+	store.mu.RLock()
+	defer store.mu.RUnlock()
+
+	if len(store.rollups) != 1 {
+		t.Fatalf("expected 1 rollup, got %d", len(store.rollups))
+	}
+	r := store.rollups[0]
+	if r.RequestCount != 1 {
+		t.Errorf("request_count = %d after 5 cycles, want 1", r.RequestCount)
+	}
+	if r.TotalTokens != 15 {
+		t.Errorf("total_tokens = %d after 5 cycles, want 15", r.TotalTokens)
+	}
+	if r.CostUSD != 0.01 {
+		t.Errorf("cost_usd = %f after 5 cycles, want 0.01", r.CostUSD)
 	}
 }
 

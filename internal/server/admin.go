@@ -171,6 +171,10 @@ func (s *server) handleListKeys(w http.ResponseWriter, r *http.Request) {
 	if orgID == "" {
 		orgID = identity.OrgID
 	}
+	if orgID != identity.OrgID {
+		writeJSON(w, http.StatusForbidden, errorResponse("cannot access keys outside your organization"))
+		return
+	}
 	offset, limit := parsePagination(r)
 
 	keys, err := s.deps.Store.ListKeys(r.Context(), orgID, offset, limit)
@@ -198,9 +202,13 @@ func (s *server) handleCreateKey(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, errorResponse("invalid role"))
 		return
 	}
+	identity := gateway.IdentityFromContext(r.Context())
 	if req.OrgID == "" {
-		identity := gateway.IdentityFromContext(r.Context())
 		req.OrgID = identity.OrgID
+	}
+	if req.OrgID != identity.OrgID {
+		writeJSON(w, http.StatusForbidden, errorResponse("cannot create keys outside your organization"))
+		return
 	}
 
 	var expiresAt *time.Time
@@ -243,6 +251,11 @@ func (s *server) handleGetKey(w http.ResponseWriter, r *http.Request) {
 		writeAdminError(w, r, err)
 		return
 	}
+	identity := gateway.IdentityFromContext(r.Context())
+	if key.OrgID != identity.OrgID {
+		writeJSON(w, http.StatusNotFound, errorResponse("not found"))
+		return
+	}
 	writeJSON(w, http.StatusOK, key)
 }
 
@@ -251,6 +264,11 @@ func (s *server) handleUpdateKey(w http.ResponseWriter, r *http.Request) {
 	existing, err := s.deps.Store.GetKey(r.Context(), id)
 	if err != nil {
 		writeAdminError(w, r, err)
+		return
+	}
+	identity := gateway.IdentityFromContext(r.Context())
+	if existing.OrgID != identity.OrgID {
+		writeJSON(w, http.StatusNotFound, errorResponse("not found"))
 		return
 	}
 
@@ -309,6 +327,16 @@ func (s *server) handleUpdateKey(w http.ResponseWriter, r *http.Request) {
 
 func (s *server) handleDeleteKey(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
+	key, err := s.deps.Store.GetKey(r.Context(), id)
+	if err != nil {
+		writeAdminError(w, r, err)
+		return
+	}
+	identity := gateway.IdentityFromContext(r.Context())
+	if key.OrgID != identity.OrgID {
+		writeJSON(w, http.StatusNotFound, errorResponse("not found"))
+		return
+	}
 	if err := s.deps.Store.DeleteKey(r.Context(), id); err != nil {
 		writeAdminError(w, r, err)
 		return
@@ -402,7 +430,16 @@ func (s *server) handleCachePurge(w http.ResponseWriter, r *http.Request) {
 // --- Usage ---
 
 func (s *server) handleQueryUsage(w http.ResponseWriter, r *http.Request) {
+	identity := gateway.IdentityFromContext(r.Context())
 	q := r.URL.Query()
+	orgID := q.Get("org_id")
+	if orgID == "" {
+		orgID = identity.OrgID
+	}
+	if orgID != identity.OrgID {
+		writeJSON(w, http.StatusForbidden, errorResponse("cannot access usage outside your organization"))
+		return
+	}
 	// Validate RFC3339 upfront: SQLite datetime() silently returns NULL on
 	// malformed strings, producing empty results instead of a clear error.
 	since, until := q.Get("since"), q.Get("until")
@@ -420,7 +457,7 @@ func (s *server) handleQueryUsage(w http.ResponseWriter, r *http.Request) {
 	}
 	offset, limit := parsePagination(r)
 	filter := gateway.UsageFilter{
-		OrgID:  q.Get("org_id"),
+		OrgID:  orgID,
 		KeyID:  q.Get("key_id"),
 		Model:  q.Get("model"),
 		Since:  since,
@@ -444,7 +481,16 @@ func (s *server) handleQueryUsage(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) handleUsageSummary(w http.ResponseWriter, r *http.Request) {
+	identity := gateway.IdentityFromContext(r.Context())
 	q := r.URL.Query()
+	orgID := q.Get("org_id")
+	if orgID == "" {
+		orgID = identity.OrgID
+	}
+	if orgID != identity.OrgID {
+		writeJSON(w, http.StatusForbidden, errorResponse("cannot access usage outside your organization"))
+		return
+	}
 	// Validate RFC3339 upfront: SQLite datetime() silently returns NULL on
 	// malformed strings, producing empty results instead of a clear error.
 	since, until := q.Get("since"), q.Get("until")
@@ -461,7 +507,7 @@ func (s *server) handleUsageSummary(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	filter := gateway.RollupFilter{
-		OrgID:  q.Get("org_id"),
+		OrgID:  orgID,
 		KeyID:  q.Get("key_id"),
 		Model:  q.Get("model"),
 		Period: q.Get("period"),

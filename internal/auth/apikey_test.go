@@ -63,6 +63,9 @@ func (s *fakeKeyStore) TouchKeyUsed(_ context.Context, id string) error {
 	s.mu.Unlock()
 	return nil
 }
+func (s *fakeKeyStore) ListBudgetedKeyIDs(context.Context) (map[string]float64, error) {
+	return nil, nil
+}
 
 func (s *fakeKeyStore) touchCount(id string) int {
 	s.mu.RLock()

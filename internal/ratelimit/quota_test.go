@@ -122,3 +122,42 @@ func TestQuotaTracker_SyncNewKey(t *testing.T) {
 		t.Error("key at 3/5 should be within budget")
 	}
 }
+
+func TestQuotaTracker_Preload(t *testing.T) {
+	t.Parallel()
+	q := NewQuotaTracker()
+
+	// Preload seeds the entry so SyncAll will include it.
+	q.Preload("preloaded", 10.0)
+
+	store := &fakeQuotaStore{costs: map[string]float64{"preloaded": 9.0}}
+	if err := q.SyncAll(context.Background(), store); err != nil {
+		t.Fatal(err)
+	}
+
+	if !q.Check("preloaded", 10.0) {
+		t.Error("preloaded key at 9/10 should be within budget")
+	}
+
+	store.costs["preloaded"] = 11.0
+	if err := q.SyncAll(context.Background(), store); err != nil {
+		t.Fatal(err)
+	}
+
+	if q.Check("preloaded", 10.0) {
+		t.Error("preloaded key at 11/10 should be over budget")
+	}
+}
+
+func TestQuotaTracker_PreloadIdempotent(t *testing.T) {
+	t.Parallel()
+	q := NewQuotaTracker()
+
+	q.Consume("existing", 5.0)
+	q.Preload("existing", 10.0)
+
+	// Preload should not overwrite existing entry.
+	if !q.Check("existing", 10.0) {
+		t.Error("existing key at 5/10 should be within budget")
+	}
+}

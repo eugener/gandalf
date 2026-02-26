@@ -29,6 +29,16 @@ func NewQuotaTracker() *QuotaTracker {
 	}
 }
 
+// Preload seeds a key's budget entry without marking any consumption.
+// Used during startup to pre-populate known budgeted keys.
+func (q *QuotaTracker) Preload(keyID string, limit float64) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if _, ok := q.budgets[keyID]; !ok {
+		q.budgets[keyID] = &budgetEntry{limit: limit}
+	}
+}
+
 // Check returns true if the key is within its budget.
 // Returns true if limit is 0 (unlimited) or if no entry exists yet.
 func (q *QuotaTracker) Check(keyID string, limit float64) bool {

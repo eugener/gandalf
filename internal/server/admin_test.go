@@ -178,7 +178,8 @@ func (s *adminFakeStore) DeleteKey(_ context.Context, id string) error {
 	delete(s.keys, id)
 	return nil
 }
-func (s *adminFakeStore) TouchKeyUsed(context.Context, string) error { return nil }
+func (s *adminFakeStore) TouchKeyUsed(context.Context, string) error                   { return nil }
+func (s *adminFakeStore) ListBudgetedKeyIDs(context.Context) (map[string]float64, error) { return nil, nil }
 
 func (s *adminFakeStore) CreateRoute(_ context.Context, r *gateway.Route) error {
 	s.mu.Lock()
@@ -630,16 +631,16 @@ func TestAdminQueryUsage(t *testing.T) {
 	t.Parallel()
 	h, store := newAdminTestHandler(adminAuth{})
 
-	// Insert test usage records.
+	// Insert test usage records (admin identity has OrgID "default").
 	store.mu.Lock()
 	store.usage = []gateway.UsageRecord{
-		{ID: "u1", KeyID: "k1", OrgID: "org1", Model: "gpt-4o", PromptTokens: 10},
-		{ID: "u2", KeyID: "k2", OrgID: "org2", Model: "gpt-3.5", PromptTokens: 5},
+		{ID: "u1", KeyID: "k1", OrgID: "default", Model: "gpt-4o", PromptTokens: 10},
+		{ID: "u2", KeyID: "k2", OrgID: "default", Model: "gpt-3.5", PromptTokens: 5},
 	}
 	store.mu.Unlock()
 
-	// Query with filter.
-	req := httptest.NewRequest(http.MethodGet, "/admin/v1/usage?org_id=org1", nil)
+	// Query own org (default to caller's org).
+	req := httptest.NewRequest(http.MethodGet, "/admin/v1/usage", nil)
 	req.Header.Set("Authorization", "Bearer gnd_admin")
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
@@ -649,20 +650,14 @@ func TestAdminQueryUsage(t *testing.T) {
 	if !strings.Contains(rec.Body.String(), "u1") {
 		t.Error("response should contain u1")
 	}
-	if strings.Contains(rec.Body.String(), "u2") {
-		t.Error("response should not contain u2 (filtered by org)")
-	}
 
-	// Query empty result.
-	req = httptest.NewRequest(http.MethodGet, "/admin/v1/usage?org_id=nonexistent", nil)
+	// Query cross-org -> 403.
+	req = httptest.NewRequest(http.MethodGet, "/admin/v1/usage?org_id=other-org", nil)
 	req.Header.Set("Authorization", "Bearer gnd_admin")
 	rec = httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("empty usage query: status = %d", rec.Code)
-	}
-	if !strings.Contains(rec.Body.String(), `"data":[]`) {
-		t.Error("empty usage should return empty array")
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("cross-org usage query: status = %d, want 403", rec.Code)
 	}
 }
 
@@ -670,15 +665,16 @@ func TestAdminUsageSummary(t *testing.T) {
 	t.Parallel()
 	h, store := newAdminTestHandler(adminAuth{})
 
-	// Insert test rollups.
+	// Insert test rollups (admin identity has OrgID "default").
 	store.mu.Lock()
 	store.rollups = []gateway.UsageRollup{
-		{OrgID: "org1", KeyID: "k1", Model: "gpt-4o", Period: "hourly",
+		{OrgID: "default", KeyID: "k1", Model: "gpt-4o", Period: "hourly",
 			Bucket: "2024-01-01T00:00:00Z", RequestCount: 10},
 	}
 	store.mu.Unlock()
 
-	req := httptest.NewRequest(http.MethodGet, "/admin/v1/usage/summary?org_id=org1&period=hourly", nil)
+	// Query own org.
+	req := httptest.NewRequest(http.MethodGet, "/admin/v1/usage/summary?period=hourly", nil)
 	req.Header.Set("Authorization", "Bearer gnd_admin")
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
@@ -689,20 +685,13 @@ func TestAdminUsageSummary(t *testing.T) {
 		t.Error("response should contain rollup data")
 	}
 
-	// Empty summary.
-	store.mu.Lock()
-	store.rollups = nil
-	store.mu.Unlock()
-
-	req = httptest.NewRequest(http.MethodGet, "/admin/v1/usage/summary?org_id=empty", nil)
+	// Cross-org summary -> 403.
+	req = httptest.NewRequest(http.MethodGet, "/admin/v1/usage/summary?org_id=other-org", nil)
 	req.Header.Set("Authorization", "Bearer gnd_admin")
 	rec = httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("empty summary: status = %d", rec.Code)
-	}
-	if !strings.Contains(rec.Body.String(), `"data":[]`) {
-		t.Error("empty summary should return empty array")
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("cross-org summary: status = %d, want 403", rec.Code)
 	}
 }
 
@@ -780,4 +769,63 @@ type conflictOnCreateStore struct {
 
 func (s *conflictOnCreateStore) CreateProvider(_ context.Context, _ *gateway.ProviderConfig) error {
 	return gateway.ErrConflict
+}
+
+func TestAdminCrossOrgKeyAccess(t *testing.T) {
+	t.Parallel()
+	h, store := newAdminTestHandler(adminAuth{})
+
+	// Seed a key in a different org.
+	store.mu.Lock()
+	store.keys["cross-org-key"] = &gateway.APIKey{
+		ID: "cross-org-key", OrgID: "other-org", Role: "member",
+	}
+	store.mu.Unlock()
+
+	// GET cross-org key -> 404.
+	req := httptest.NewRequest(http.MethodGet, "/admin/v1/keys/cross-org-key", nil)
+	req.Header.Set("Authorization", "Bearer gnd_admin")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("get cross-org key: status = %d, want 404", rec.Code)
+	}
+
+	// PUT cross-org key -> 404.
+	body := `{"blocked":true}`
+	req = httptest.NewRequest(http.MethodPut, "/admin/v1/keys/cross-org-key", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer gnd_admin")
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("update cross-org key: status = %d, want 404", rec.Code)
+	}
+
+	// DELETE cross-org key -> 404.
+	req = httptest.NewRequest(http.MethodDelete, "/admin/v1/keys/cross-org-key", nil)
+	req.Header.Set("Authorization", "Bearer gnd_admin")
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("delete cross-org key: status = %d, want 404", rec.Code)
+	}
+
+	// LIST with cross-org filter -> 403.
+	req = httptest.NewRequest(http.MethodGet, "/admin/v1/keys?org_id=other-org", nil)
+	req.Header.Set("Authorization", "Bearer gnd_admin")
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("list cross-org keys: status = %d, want 403", rec.Code)
+	}
+
+	// CREATE with cross-org -> 403.
+	body = `{"org_id":"other-org","role":"member"}`
+	req = httptest.NewRequest(http.MethodPost, "/admin/v1/keys", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer gnd_admin")
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("create cross-org key: status = %d, want 403", rec.Code)
+	}
 }

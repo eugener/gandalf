@@ -17,6 +17,8 @@ type APIKeyStore interface {
 	UpdateKey(ctx context.Context, key *gateway.APIKey) error
 	DeleteKey(ctx context.Context, id string) error
 	TouchKeyUsed(ctx context.Context, id string) error
+	// ListBudgetedKeyIDs returns a map of key ID to max_budget for keys with budgets > 0.
+	ListBudgetedKeyIDs(ctx context.Context) (map[string]float64, error)
 }
 
 // ProviderStore manages provider configuration persistence.

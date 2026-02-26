@@ -607,7 +607,7 @@ func TestUsageRollupUpsert(t *testing.T) {
 		t.Fatal("first upsert:", err)
 	}
 
-	// Upsert again -- should accumulate.
+	// Upsert again -- should replace, not accumulate.
 	rollups[0].RequestCount = 5
 	rollups[0].TotalTokens = 50
 	rollups[0].CostUSD = 0.25
@@ -622,14 +622,14 @@ func TestUsageRollupUpsert(t *testing.T) {
 	if len(got) != 1 {
 		t.Fatalf("rollups = %d, want 1", len(got))
 	}
-	if got[0].RequestCount != 15 {
-		t.Errorf("request_count = %d, want 15", got[0].RequestCount)
+	if got[0].RequestCount != 5 {
+		t.Errorf("request_count = %d, want 5", got[0].RequestCount)
 	}
-	if got[0].TotalTokens != 150 {
-		t.Errorf("total_tokens = %d, want 150", got[0].TotalTokens)
+	if got[0].TotalTokens != 50 {
+		t.Errorf("total_tokens = %d, want 50", got[0].TotalTokens)
 	}
-	if got[0].CostUSD < 0.74 || got[0].CostUSD > 0.76 {
-		t.Errorf("cost = %f, want ~0.75", got[0].CostUSD)
+	if got[0].CostUSD < 0.24 || got[0].CostUSD > 0.26 {
+		t.Errorf("cost = %f, want ~0.25", got[0].CostUSD)
 	}
 
 	// Query with filters that don't match.

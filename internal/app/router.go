@@ -43,9 +43,8 @@ type ResolvedTarget struct {
 }
 
 // ResolveModel maps a model alias to an ordered list of targets sorted by
-// priority (ascending). If no route is found, a single target defaulting to
-// "openai" with the original model name is returned. Results are cached to
-// avoid per-request JSON parsing.
+// priority (ascending). Returns an error if no route is found for the model.
+// Results are cached to avoid per-request JSON parsing.
 func (rs *RouterService) ResolveModel(ctx context.Context, model string) ([]ResolvedTarget, error) {
 	if cached, ok := rs.cache.GetIfPresent(model); ok {
 		return cached, nil

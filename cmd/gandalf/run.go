@@ -255,7 +255,7 @@ func run(configPath string) error {
 
 	// Workers.
 	workers := []worker.Worker{usageRecorder}
-	workers = append(workers, worker.NewQuotaSyncWorker(quotaTracker, store))
+	workers = append(workers, worker.NewQuotaSyncWorkerWithBudgets(quotaTracker, store, store))
 	workers = append(workers, worker.NewUsageRollupWorker(store))
 
 	runner := worker.NewRunner(workers...)

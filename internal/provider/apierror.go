@@ -15,8 +15,22 @@ type APIError struct {
 	Body       string
 }
 
-// Error returns a formatted error string including provider, status, and body.
+// maxErrorBodyLen is the maximum body length included in Error() output.
+// Keeps log lines safe from PII in upstream error bodies.
+const maxErrorBodyLen = 256
+
+// Error returns a formatted error string including provider, status, and
+// a truncated body (max 256 chars) to avoid logging PII from upstream.
 func (e *APIError) Error() string {
+	body := e.Body
+	if len(body) > maxErrorBodyLen {
+		body = body[:maxErrorBodyLen] + "...(truncated)"
+	}
+	return fmt.Sprintf("%s: HTTP %d: %s", e.Provider, e.StatusCode, body)
+}
+
+// FullError returns the complete error string with the untruncated body.
+func (e *APIError) FullError() string {
 	return fmt.Sprintf("%s: HTTP %d: %s", e.Provider, e.StatusCode, e.Body)
 }
 

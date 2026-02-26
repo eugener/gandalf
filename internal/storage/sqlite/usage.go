@@ -151,12 +151,12 @@ func (s *Store) UpsertRollup(ctx context.Context, rollups []gateway.UsageRollup)
 		 request_count, prompt_tokens, completion_tokens, total_tokens, cost_usd, cached_count)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(org_id, key_id, model, period, bucket) DO UPDATE SET
-		 request_count = request_count + excluded.request_count,
-		 prompt_tokens = prompt_tokens + excluded.prompt_tokens,
-		 completion_tokens = completion_tokens + excluded.completion_tokens,
-		 total_tokens = total_tokens + excluded.total_tokens,
-		 cost_usd = cost_usd + excluded.cost_usd,
-		 cached_count = cached_count + excluded.cached_count`)
+		 request_count = excluded.request_count,
+		 prompt_tokens = excluded.prompt_tokens,
+		 completion_tokens = excluded.completion_tokens,
+		 total_tokens = excluded.total_tokens,
+		 cost_usd = excluded.cost_usd,
+		 cached_count = excluded.cached_count`)
 	if err != nil {
 		return err
 	}

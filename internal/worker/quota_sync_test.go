@@ -16,6 +16,14 @@ func (s *fakeQuotaStore) SumUsageCost(_ context.Context, keyID string) (float64,
 	return s.costs[keyID], nil
 }
 
+type fakeBudgetStore struct {
+	budgets map[string]float64
+}
+
+func (s *fakeBudgetStore) ListBudgetedKeyIDs(_ context.Context) (map[string]float64, error) {
+	return s.budgets, nil
+}
+
 func TestQuotaSyncWorker_Run(t *testing.T) {
 	t.Parallel()
 	tracker := ratelimit.NewQuotaTracker()
@@ -41,5 +49,36 @@ func TestQuotaSyncWorker_Run(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("worker did not stop")
+	}
+}
+
+func TestQuotaSyncWorker_PreloadBudgets(t *testing.T) {
+	t.Parallel()
+	tracker := ratelimit.NewQuotaTracker()
+	quotaStore := &fakeQuotaStore{costs: map[string]float64{"budgeted-key": 8.0}}
+	budgetStore := &fakeBudgetStore{budgets: map[string]float64{"budgeted-key": 10.0}}
+
+	w := NewQuotaSyncWorkerWithBudgets(tracker, quotaStore, budgetStore)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- w.Run(ctx) }()
+
+	// Wait for initial sync.
+	time.Sleep(100 * time.Millisecond)
+	cancel()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Errorf("unexpected error: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("worker did not stop")
+	}
+
+	// After preload + sync, key should be within budget (8/10).
+	if !tracker.Check("budgeted-key", 10.0) {
+		t.Error("preloaded+synced key at 8/10 should be within budget")
 	}
 }
