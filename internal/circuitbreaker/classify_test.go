@@ -60,3 +60,24 @@ func TestClassifyError_WrappedStatus(t *testing.T) {
 		t.Errorf("wrapped 502 = %f, want 1.0", got)
 	}
 }
+
+func TestClassifyStatus_EdgeCases(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		code int
+		want float64
+	}{
+		{200, 0.0},   // success codes
+		{201, 0.0},   // 2xx
+		{301, 0.0},   // redirects
+		{505, 0.0},   // 505+ not in 500-504 range
+		{599, 0.0},   // high 5xx
+	}
+	for _, tt := range tests {
+		got := classifyStatus(tt.code)
+		if got != tt.want {
+			t.Errorf("classifyStatus(%d) = %f, want %f", tt.code, got, tt.want)
+		}
+	}
+}

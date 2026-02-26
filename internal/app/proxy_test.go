@@ -553,3 +553,176 @@ func TestChatCompletion_CircuitBreakerRecordsErrors(t *testing.T) {
 		t.Fatalf("state = %v, want open", cb.State())
 	}
 }
+
+func TestChatCompletionStream_CircuitBreakerSkipsOpenProvider(t *testing.T) {
+	t.Parallel()
+
+	reg := provider.NewRegistry()
+	reg.Register("bad", &testutil.FakeProvider{
+		ProviderName: "bad",
+		StreamFn: func(context.Context, *gateway.ChatRequest) (<-chan gateway.StreamChunk, error) {
+			return nil, errors.New("should not be called")
+		},
+	})
+	reg.Register("good", &testutil.FakeProvider{
+		ProviderName: "good",
+		StreamFn: func(_ context.Context, _ *gateway.ChatRequest) (<-chan gateway.StreamChunk, error) {
+			return testutil.FakeStreamChan(gateway.StreamChunk{Data: []byte("ok")}), nil
+		},
+	})
+
+	store := testutil.NewFakeStore()
+	store.AddRoute(&gateway.Route{
+		ID:         "r-1",
+		ModelAlias: "model-a",
+		Targets:    []byte(`[{"provider_id":"bad","model":"model-a","priority":1},{"provider_id":"good","model":"model-a","priority":2}]`),
+		Strategy:   "priority",
+	})
+
+	cbReg := circuitbreaker.NewRegistry(circuitbreaker.Config{
+		ErrorThreshold: 0.30, MinSamples: 5, WindowSeconds: 60, OpenTimeout: 30 * time.Second,
+	})
+	cb := cbReg.GetOrCreate("bad")
+	for range 10 {
+		cb.RecordError(1.0)
+	}
+
+	ps := NewProxyService(reg, NewRouterService(store), nil, cbReg)
+	ch, err := ps.ChatCompletionStream(context.Background(), &gateway.ChatRequest{Model: "model-a"})
+	if err != nil {
+		t.Fatalf("ChatCompletionStream: %v", err)
+	}
+	first := <-ch
+	if string(first.Data) != "ok" {
+		t.Errorf("data = %q, want ok", first.Data)
+	}
+}
+
+func TestChatCompletionStream_CircuitBreakerRecordsErrors(t *testing.T) {
+	t.Parallel()
+
+	reg := provider.NewRegistry()
+	reg.Register("flaky", &testutil.FakeProvider{
+		ProviderName: "flaky",
+		StreamFn: func(context.Context, *gateway.ChatRequest) (<-chan gateway.StreamChunk, error) {
+			return nil, errors.New("stream error")
+		},
+	})
+	reg.Register("backup", &testutil.FakeProvider{
+		ProviderName: "backup",
+		StreamFn: func(_ context.Context, _ *gateway.ChatRequest) (<-chan gateway.StreamChunk, error) {
+			return testutil.FakeStreamChan(gateway.StreamChunk{Data: []byte("ok")}), nil
+		},
+	})
+
+	store := testutil.NewFakeStore()
+	store.AddRoute(&gateway.Route{
+		ID:         "r-1",
+		ModelAlias: "model-a",
+		Targets:    []byte(`[{"provider_id":"flaky","model":"model-a","priority":1},{"provider_id":"backup","model":"model-a","priority":2}]`),
+		Strategy:   "priority",
+	})
+
+	cbReg := circuitbreaker.NewRegistry(circuitbreaker.Config{
+		ErrorThreshold: 0.30, MinSamples: 5, WindowSeconds: 60, OpenTimeout: 30 * time.Second,
+	})
+
+	ps := NewProxyService(reg, NewRouterService(store), nil, cbReg)
+	for range 6 {
+		ps.ChatCompletionStream(context.Background(), &gateway.ChatRequest{Model: "model-a"})
+	}
+
+	cb := cbReg.Get("flaky")
+	if cb == nil {
+		t.Fatal("expected breaker for flaky")
+	}
+	if cb.State() != circuitbreaker.StateOpen {
+		t.Fatalf("state = %v, want open", cb.State())
+	}
+}
+
+func TestEmbeddings_CircuitBreakerSkipsOpenProvider(t *testing.T) {
+	t.Parallel()
+
+	reg := provider.NewRegistry()
+	reg.Register("bad", &testutil.FakeProvider{
+		ProviderName: "bad",
+		EmbedFn: func(context.Context, *gateway.EmbeddingRequest) (*gateway.EmbeddingResponse, error) {
+			return nil, errors.New("should not be called")
+		},
+	})
+	reg.Register("good", &testutil.FakeProvider{
+		ProviderName: "good",
+		EmbedFn: func(_ context.Context, req *gateway.EmbeddingRequest) (*gateway.EmbeddingResponse, error) {
+			return &gateway.EmbeddingResponse{Object: "list", Model: req.Model}, nil
+		},
+	})
+
+	store := testutil.NewFakeStore()
+	store.AddRoute(&gateway.Route{
+		ID:         "r-1",
+		ModelAlias: "embed-model",
+		Targets:    []byte(`[{"provider_id":"bad","model":"embed-model","priority":1},{"provider_id":"good","model":"embed-model","priority":2}]`),
+		Strategy:   "priority",
+	})
+
+	cbReg := circuitbreaker.NewRegistry(circuitbreaker.Config{
+		ErrorThreshold: 0.30, MinSamples: 5, WindowSeconds: 60, OpenTimeout: 30 * time.Second,
+	})
+	cb := cbReg.GetOrCreate("bad")
+	for range 10 {
+		cb.RecordError(1.0)
+	}
+
+	ps := NewProxyService(reg, NewRouterService(store), nil, cbReg)
+	resp, err := ps.Embeddings(context.Background(), &gateway.EmbeddingRequest{Model: "embed-model"})
+	if err != nil {
+		t.Fatalf("Embeddings: %v", err)
+	}
+	if resp.Object != "list" {
+		t.Errorf("object = %q, want list", resp.Object)
+	}
+}
+
+func TestEmbeddings_CircuitBreakerRecordsErrors(t *testing.T) {
+	t.Parallel()
+
+	reg := provider.NewRegistry()
+	reg.Register("flaky", &testutil.FakeProvider{
+		ProviderName: "flaky",
+		EmbedFn: func(context.Context, *gateway.EmbeddingRequest) (*gateway.EmbeddingResponse, error) {
+			return nil, errors.New("embed error")
+		},
+	})
+	reg.Register("backup", &testutil.FakeProvider{
+		ProviderName: "backup",
+		EmbedFn: func(_ context.Context, req *gateway.EmbeddingRequest) (*gateway.EmbeddingResponse, error) {
+			return &gateway.EmbeddingResponse{Object: "list", Model: req.Model}, nil
+		},
+	})
+
+	store := testutil.NewFakeStore()
+	store.AddRoute(&gateway.Route{
+		ID:         "r-1",
+		ModelAlias: "embed-model",
+		Targets:    []byte(`[{"provider_id":"flaky","model":"embed-model","priority":1},{"provider_id":"backup","model":"embed-model","priority":2}]`),
+		Strategy:   "priority",
+	})
+
+	cbReg := circuitbreaker.NewRegistry(circuitbreaker.Config{
+		ErrorThreshold: 0.30, MinSamples: 5, WindowSeconds: 60, OpenTimeout: 30 * time.Second,
+	})
+
+	ps := NewProxyService(reg, NewRouterService(store), nil, cbReg)
+	for range 6 {
+		ps.Embeddings(context.Background(), &gateway.EmbeddingRequest{Model: "embed-model"})
+	}
+
+	cb := cbReg.Get("flaky")
+	if cb == nil {
+		t.Fatal("expected breaker for flaky")
+	}
+	if cb.State() != circuitbreaker.StateOpen {
+		t.Fatalf("state = %v, want open", cb.State())
+	}
+}

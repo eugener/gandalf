@@ -229,6 +229,96 @@ func TestBreaker_WeightedErrors(t *testing.T) {
 	}
 }
 
+func TestSlidingWindow_InvalidSize(t *testing.T) {
+	t.Parallel()
+
+	// windowSeconds <= 0 or > 60 should clamp to 60.
+	w := newSlidingWindow(0)
+	if w.size != 60 {
+		t.Fatalf("size = %d, want 60 for zero input", w.size)
+	}
+	w2 := newSlidingWindow(100)
+	if w2.size != 60 {
+		t.Fatalf("size = %d, want 60 for oversized input", w2.size)
+	}
+	w3 := newSlidingWindow(-1)
+	if w3.size != 60 {
+		t.Fatalf("size = %d, want 60 for negative input", w3.size)
+	}
+}
+
+func TestBreaker_AllProvidersFail_CBOpenForAll(t *testing.T) {
+	t.Parallel()
+
+	cfg := Config{
+		ErrorThreshold: 0.50,
+		MinSamples:     2,
+		WindowSeconds:  60,
+		OpenTimeout:    30 * time.Second,
+	}
+	b := NewBreaker(cfg)
+
+	// All fail: 2 errors at 100% -> open.
+	b.RecordError(1.0)
+	b.RecordError(1.0)
+
+	if b.State() != StateOpen {
+		t.Fatalf("state = %v, want open", b.State())
+	}
+	if b.Allow() {
+		t.Fatal("open breaker should reject")
+	}
+}
+
+func TestBreaker_ZeroWeightDoesNotTrip(t *testing.T) {
+	t.Parallel()
+
+	cfg := Config{
+		ErrorThreshold: 0.30,
+		MinSamples:     10,
+		WindowSeconds:  60,
+		OpenTimeout:    30 * time.Second,
+	}
+	b := NewBreaker(cfg)
+
+	// 10 "errors" with weight 0 (client errors) should not trip.
+	for range 10 {
+		b.RecordError(0)
+	}
+	if b.State() != StateClosed {
+		t.Fatalf("state = %v, want closed (zero-weight errors)", b.State())
+	}
+}
+
+func TestBreaker_ConcurrentAccess(t *testing.T) {
+	t.Parallel()
+
+	b := NewBreaker(Config{
+		ErrorThreshold: 0.50,
+		MinSamples:     100,
+		WindowSeconds:  60,
+		OpenTimeout:    1 * time.Millisecond,
+	})
+
+	done := make(chan struct{})
+	for range 10 {
+		go func() {
+			for range 100 {
+				b.Allow()
+				b.RecordSuccess()
+				b.RecordError(0.5)
+				_ = b.State()
+				_ = b.LastUsed()
+			}
+			done <- struct{}{}
+		}()
+	}
+	for range 10 {
+		<-done
+	}
+	// No race detected = pass (test runs with -race).
+}
+
 func TestState_String(t *testing.T) {
 	t.Parallel()
 
