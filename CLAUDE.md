@@ -79,10 +79,12 @@ API keys require `gnd_` prefix. Set via `GANDALF_ADMIN_KEY` env var. Delete `gan
 Every change to `internal/server/` or `internal/app/` hot paths must preserve alloc counts. Run `make bench` before and after; if allocs/op increase, fix before committing. Current baseline (with `GOEXPERIMENT=jsonv2`):
 
 ```
-ChatCompletion:       41 allocs/op
-ChatCompletionStream: 44 allocs/op
-Healthz:              25 allocs/op
+ChatCompletion:              41 allocs/op  (handler-only: 25)
+ChatCompletionStream:        44 allocs/op  (handler-only: 26)
+Healthz:                     19 allocs/op  (handler-only:  5)
 ```
+
+Integration benchmarks (`Benchmark*`) include httptest setup overhead (~8-10 allocs). Handler-only variants (`Benchmark*Handler`) use pre-allocated headers and a discard writer to isolate server allocs. Probe endpoints (`/healthz`, `/readyz`, `/metrics`) skip requestID, logging, metrics, and tracing middleware.
 
 Known pitfalls on hot paths:
 - **No Go generics**: shape dictionary + closure causes +1 alloc/op. Use concrete `any` params or inline loops instead

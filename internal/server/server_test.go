@@ -206,7 +206,8 @@ func TestRequestIDHeader(t *testing.T) {
 	t.Parallel()
 	h := newTestHandler()
 
-	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	req.Header.Set("Authorization", "Bearer gnd_test")
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 

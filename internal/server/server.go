@@ -63,77 +63,83 @@ func New(deps Deps) http.Handler {
 
 	r := chi.NewRouter()
 
-	// Global middleware
+	// Lightweight global middleware (all routes including probes)
 	r.Use(s.securityHeaders)
 	r.Use(s.recovery)
-	r.Use(s.requestID)
-	r.Use(s.logging)
-	if deps.Metrics != nil {
-		r.Use(metricsMiddleware(deps.Metrics))
-	}
-	if deps.Tracer != nil {
-		r.Use(tracingMiddleware(deps.Tracer))
-	}
 
-	// System endpoints (no auth)
+	// Probe/system endpoints -- no requestID, logging, metrics, or tracing.
+	// These are called at high frequency by orchestrators (K8s kubelet);
+	// skipping heavy middleware saves ~17 allocs/req.
 	r.Get("/healthz", s.handleHealthz)
 	r.Get("/readyz", s.handleReadyz)
 	if deps.MetricsHandler != nil {
 		r.Handle("/metrics", deps.MetricsHandler)
 	}
 
-	// Client-facing API (auth required) -- universal OpenAI-format
+	// All other routes get full observability middleware.
 	r.Group(func(r chi.Router) {
-		r.Use(s.authenticate)
-		r.Use(s.rateLimit)
-		r.Post("/v1/chat/completions", s.handleChatCompletion)
-		r.Post("/v1/embeddings", s.handleEmbeddings)
-		r.Get("/v1/models", s.handleListModels)
-	})
+		r.Use(s.requestID)
+		r.Use(s.logging)
+		if deps.Metrics != nil {
+			r.Use(metricsMiddleware(deps.Metrics))
+		}
+		if deps.Tracer != nil {
+			r.Use(tracingMiddleware(deps.Tracer))
+		}
 
-	// Native API passthrough routes (per-provider auth normalization)
-	s.mountNativeRoutes(r)
-
-	// Admin API (auth + RBAC required)
-	if deps.Store != nil {
-		r.Route("/admin/v1", func(r chi.Router) {
+		// Client-facing API (auth required) -- universal OpenAI-format
+		r.Group(func(r chi.Router) {
 			r.Use(s.authenticate)
-
-			r.Group(func(r chi.Router) {
-				r.Use(s.requirePerm(gateway.PermManageProviders))
-				r.Get("/providers", s.handleListProviders)
-				r.Post("/providers", s.handleCreateProvider)
-				r.Get("/providers/{id}", s.handleGetProvider)
-				r.Put("/providers/{id}", s.handleUpdateProvider)
-				r.Delete("/providers/{id}", s.handleDeleteProvider)
-				r.Post("/cache/purge", s.handleCachePurge)
-			})
-
-			r.Group(func(r chi.Router) {
-				r.Use(s.requirePerm(gateway.PermManageAllKeys))
-				r.Get("/keys", s.handleListKeys)
-				r.Post("/keys", s.handleCreateKey)
-				r.Get("/keys/{id}", s.handleGetKey)
-				r.Put("/keys/{id}", s.handleUpdateKey)
-				r.Delete("/keys/{id}", s.handleDeleteKey)
-			})
-
-			r.Group(func(r chi.Router) {
-				r.Use(s.requirePerm(gateway.PermManageRoutes))
-				r.Get("/routes", s.handleListRoutes)
-				r.Post("/routes", s.handleCreateRoute)
-				r.Get("/routes/{id}", s.handleGetRoute)
-				r.Put("/routes/{id}", s.handleUpdateRoute)
-				r.Delete("/routes/{id}", s.handleDeleteRoute)
-			})
-
-			r.Group(func(r chi.Router) {
-				r.Use(s.requirePerm(gateway.PermViewAllUsage))
-				r.Get("/usage", s.handleQueryUsage)
-				r.Get("/usage/summary", s.handleUsageSummary)
-			})
+			r.Use(s.rateLimit)
+			r.Post("/v1/chat/completions", s.handleChatCompletion)
+			r.Post("/v1/embeddings", s.handleEmbeddings)
+			r.Get("/v1/models", s.handleListModels)
 		})
-	}
+
+		// Native API passthrough routes (per-provider auth normalization)
+		s.mountNativeRoutes(r)
+
+		// Admin API (auth + RBAC required)
+		if deps.Store != nil {
+			r.Route("/admin/v1", func(r chi.Router) {
+				r.Use(s.authenticate)
+
+				r.Group(func(r chi.Router) {
+					r.Use(s.requirePerm(gateway.PermManageProviders))
+					r.Get("/providers", s.handleListProviders)
+					r.Post("/providers", s.handleCreateProvider)
+					r.Get("/providers/{id}", s.handleGetProvider)
+					r.Put("/providers/{id}", s.handleUpdateProvider)
+					r.Delete("/providers/{id}", s.handleDeleteProvider)
+					r.Post("/cache/purge", s.handleCachePurge)
+				})
+
+				r.Group(func(r chi.Router) {
+					r.Use(s.requirePerm(gateway.PermManageAllKeys))
+					r.Get("/keys", s.handleListKeys)
+					r.Post("/keys", s.handleCreateKey)
+					r.Get("/keys/{id}", s.handleGetKey)
+					r.Put("/keys/{id}", s.handleUpdateKey)
+					r.Delete("/keys/{id}", s.handleDeleteKey)
+				})
+
+				r.Group(func(r chi.Router) {
+					r.Use(s.requirePerm(gateway.PermManageRoutes))
+					r.Get("/routes", s.handleListRoutes)
+					r.Post("/routes", s.handleCreateRoute)
+					r.Get("/routes/{id}", s.handleGetRoute)
+					r.Put("/routes/{id}", s.handleUpdateRoute)
+					r.Delete("/routes/{id}", s.handleDeleteRoute)
+				})
+
+				r.Group(func(r chi.Router) {
+					r.Use(s.requirePerm(gateway.PermViewAllUsage))
+					r.Get("/usage", s.handleQueryUsage)
+					r.Get("/usage/summary", s.handleUsageSummary)
+				})
+			})
+		}
+	})
 
 	return r
 }

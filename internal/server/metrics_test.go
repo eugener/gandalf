@@ -78,9 +78,10 @@ func TestMetricsMiddleware_IncrementsCounters(t *testing.T) {
 		MetricsHandler: promhttp.HandlerFor(reg, promhttp.HandlerOpts{}),
 	})
 
-	// Make a few requests.
+	// Make a few requests to an API endpoint (probes skip metrics middleware).
 	for range 3 {
-		req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+		req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+		req.Header.Set("Authorization", "Bearer gnd_test")
 		rec := httptest.NewRecorder()
 		h.ServeHTTP(rec, req)
 	}
@@ -95,12 +96,11 @@ func TestMetricsMiddleware_IncrementsCounters(t *testing.T) {
 	for _, f := range families {
 		if f.GetName() == "gandalf_requests_total" {
 			found = true
-			// Should have metrics for healthz.
 			for _, m := range f.GetMetric() {
 				for _, l := range m.GetLabel() {
-					if l.GetName() == "path" && l.GetValue() == "/healthz" {
+					if l.GetName() == "path" && l.GetValue() == "/v1/models" {
 						if m.GetCounter().GetValue() < 3 {
-							t.Errorf("requests_total for /healthz = %f, want >= 3", m.GetCounter().GetValue())
+							t.Errorf("requests_total for /v1/models = %f, want >= 3", m.GetCounter().GetValue())
 						}
 					}
 				}
