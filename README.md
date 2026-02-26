@@ -4,16 +4,79 @@ LLM gateway that sits between your applications and LLM providers, adding authen
 
 ## Features
 
-- **Multi-provider** -- OpenAI, Anthropic, Gemini, Ollama with unified OpenAI-compatible API
-- **Multi-instance** -- multiple instances of the same provider type (e.g. `openai-us`, `openai-eu`) with independent credentials and routing
-- **Native passthrough** -- forward requests directly to provider APIs without translation
-- **Priority failover** -- automatic fallback across providers on errors
-- **SSE streaming** -- real-time streaming with keep-alive and cancellation support
-- **Rate limiting** -- per-key dual token bucket (RPM + TPM) with quota enforcement
-- **Response caching** -- W-TinyLFU in-memory cache with configurable TTL
-- **Admin API** -- CRUD for providers, keys, routes; usage queries with RBAC
-- **Observability** -- Prometheus metrics (native histograms), OpenTelemetry tracing (OTLP gRPC)
-- **Auth** -- API key authentication with per-key roles (admin/member/viewer/service_account)
+### Core Gateway
+- [x] Multi-provider support (OpenAI, Anthropic, Gemini, Ollama)
+- [x] Unified OpenAI-compatible API (`/v1/chat/completions`, `/v1/embeddings`, `/v1/models`)
+- [x] Multi-instance providers (e.g. `openai-us`, `openai-eu`) with independent credentials
+- [x] Priority failover routing across providers on errors
+- [x] SSE streaming with keep-alive and client disconnect detection
+- [x] Native API passthrough (Anthropic, Gemini, Azure, Ollama) without translation
+- [x] YAML config with `${ENV_VAR}` expansion
+- [x] Graceful shutdown with in-flight request draining
+
+### Cloud Hosting
+- [x] Azure OpenAI (API key auth)
+- [x] GCP Vertex AI for Gemini and Anthropic (OAuth ADC)
+- [x] AWS Bedrock for Anthropic (SigV4 signing, binary event stream)
+- [ ] Azure Entra ID (OAuth2 token auth)
+
+### Auth and Access Control
+- [x] API key authentication (`gnd_` prefix, SHA-256 hashed)
+- [x] Per-key roles (admin / member / viewer / service_account)
+- [x] RBAC with permission bitmask (no DB lookup on hot path)
+- [x] Per-key model allowlists
+- [ ] JWT/OIDC dual-mode auth (JWKS auto-refresh, claim mapping)
+- [ ] Multi-tenant org/team hierarchy with limit inheritance
+- [ ] SSO/SAML via Dex companion service
+
+### Rate Limiting and Quotas
+- [x] Dual token bucket (RPM + TPM) per key
+- [x] Config-level default RPM/TPM fallback
+- [x] Rate limit headers (X-Ratelimit-Limit/Remaining, Retry-After)
+- [x] Quota enforcement with in-memory spend tracking
+- [x] Periodic quota sync from DB
+
+### Caching
+- [x] W-TinyLFU in-memory response cache (otter)
+- [x] Deterministic cache keys (SHA-256, normalized messages)
+- [x] Route-configurable cache TTL per model
+- [ ] Semantic caching (embedding similarity)
+- [ ] Redis cache backend
+
+### Observability
+- [x] Prometheus metrics (native histograms, request duration, tokens processed, cache hits/misses, rate limit rejects)
+- [x] OpenTelemetry distributed tracing (OTLP gRPC)
+- [x] Structured logging (log/slog)
+- [x] Per-request tracing spans with provider attribution
+
+### Admin API
+- [x] Provider CRUD (`/admin/v1/providers`)
+- [x] API key management (`/admin/v1/keys`)
+- [x] Route configuration (`/admin/v1/routes`)
+- [x] Cache purge (`/admin/v1/cache/purge`)
+- [x] Usage query and summary (`/admin/v1/usage`, `/admin/v1/usage/summary`)
+- [ ] Org/team CRUD (`/admin/v1/organizations`, `/admin/v1/teams`)
+- [ ] Auth configuration endpoint (`/admin/v1/auth/configure`)
+
+### Usage and Billing
+- [x] Async batched usage recording (buffered channel, no hot-path blocking)
+- [x] Hourly usage rollups (background worker)
+- [x] Per-request cost estimation
+- [x] Usage filtering by org, key, model, time range
+
+### Resilience (Planned)
+- [ ] Circuit breaker with weighted failure classification
+- [ ] Exponential backoff with jitter retry strategy
+- [ ] Retry budget (cap retries at 20% of base rate)
+- [ ] Peak EWMA + P2C load balancing
+- [ ] Request coalescing (singleflight for identical non-streaming requests)
+
+### Deployment
+- [x] Single static binary (pure Go, no CGO)
+- [x] Docker image
+- [x] SQLite with WAL mode (zero external dependencies)
+- [ ] PostgreSQL storage backend
+- [ ] mTLS support
 
 ## Quick Start
 
