@@ -53,3 +53,14 @@ func TestWriteSSEKeepAlive(t *testing.T) {
 		t.Errorf("body = %q, want %q", got, want)
 	}
 }
+
+func TestWriteSSEError(t *testing.T) {
+	t.Parallel()
+	rec := httptest.NewRecorder()
+	writeSSEError(rec, "upstream stream error")
+
+	want := "event: error\ndata: {\"error\":{\"message\":\"upstream stream error\",\"type\":\"stream_error\"}}\n\n"
+	if got := rec.Body.String(); got != want {
+		t.Errorf("body = %q, want %q", got, want)
+	}
+}

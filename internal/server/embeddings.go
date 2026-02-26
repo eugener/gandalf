@@ -36,7 +36,7 @@ func (s *server) handleEmbeddings(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.adjustTPM(identity, estimated, resp.Usage)
-	s.recordUsage(r, identity, req.Model, resp.Usage, elapsed, false)
+	s.recordUsage(r, identity, req.Model, resp.Usage, elapsed, http.StatusOK, false)
 
 	writeJSON(w, http.StatusOK, resp)
 }

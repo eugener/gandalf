@@ -274,6 +274,7 @@ func run(configPath string) error {
 		TokenCounter: tokenCounter,
 		Cache:          responseCache,
 		Quota:          quotaTracker,
+		KeyInvalidator: apiKeyAuth,
 		Metrics:        metrics,
 		MetricsHandler: metricsHandler,
 		Tracer:         tracer,

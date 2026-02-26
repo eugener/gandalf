@@ -36,6 +36,11 @@ type QuotaChecker interface {
 	Consume(keyID string, costUSD float64)
 }
 
+// KeyInvalidator invalidates cached auth entries when keys are modified.
+type KeyInvalidator interface {
+	InvalidateByKeyID(keyID string)
+}
+
 // Deps holds all dependencies for the HTTP server.
 type Deps struct {
 	Auth         gateway.Authenticator
@@ -52,9 +57,10 @@ type Deps struct {
 	RateLimiter  *ratelimit.Registry  // nil = no rate limiting
 	TokenCounter TokenCounter         // nil = fixed estimate
 	Cache        Cache                // nil = no caching
-	Quota        QuotaChecker         // nil = no quota enforcement
-	DefaultRPM   int64               // fallback RPM when per-key is 0
-	DefaultTPM   int64               // fallback TPM when per-key is 0
+	Quota          QuotaChecker         // nil = no quota enforcement
+	KeyInvalidator KeyInvalidator       // nil = no auth cache invalidation
+	DefaultRPM     int64               // fallback RPM when per-key is 0
+	DefaultTPM     int64               // fallback TPM when per-key is 0
 }
 
 // New creates an http.Handler with all routes and middleware wired.

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	gateway "github.com/eugener/gandalf/internal"
@@ -24,8 +25,9 @@ const (
 // APIKeyAuth authenticates requests using API keys with "gnd_" prefix.
 // It caches resolved API keys in an otter W-TinyLFU cache for fast lookups.
 type APIKeyAuth struct {
-	store storage.APIKeyStore
-	cache *otter.Cache[string, *gateway.APIKey]
+	store       storage.APIKeyStore
+	cache       *otter.Cache[string, *gateway.APIKey]
+	keyIDToHash sync.Map // keyID -> hash for cache invalidation by key ID
 }
 
 // NewAPIKeyAuth returns a new APIKeyAuth backed by store.
@@ -90,6 +92,7 @@ func (a *APIKeyAuth) Authenticate(ctx context.Context, r *http.Request) (*gatewa
 	}
 
 	a.cache.Set(hash, key)
+	a.keyIDToHash.Store(key.ID, hash)
 
 	// Touch last-used timestamp asynchronously.
 	go func() {
@@ -99,6 +102,14 @@ func (a *APIKeyAuth) Authenticate(ctx context.Context, r *http.Request) (*gatewa
 	}()
 
 	return buildIdentity(key), nil
+}
+
+// InvalidateByKeyID removes a cached API key by its key ID.
+// Used when admin operations (block, update, delete) modify a key.
+func (a *APIKeyAuth) InvalidateByKeyID(keyID string) {
+	if hash, ok := a.keyIDToHash.LoadAndDelete(keyID); ok {
+		a.cache.Invalidate(hash.(string))
+	}
 }
 
 // buildIdentity constructs an Identity from a validated API key.

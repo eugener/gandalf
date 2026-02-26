@@ -632,10 +632,12 @@ func TestAdminQueryUsage(t *testing.T) {
 	h, store := newAdminTestHandler(adminAuth{})
 
 	// Insert test usage records (admin identity has OrgID "default").
+	// Include a cross-org record that must NOT appear in results.
 	store.mu.Lock()
 	store.usage = []gateway.UsageRecord{
 		{ID: "u1", KeyID: "k1", OrgID: "default", Model: "gpt-4o", PromptTokens: 10},
 		{ID: "u2", KeyID: "k2", OrgID: "default", Model: "gpt-3.5", PromptTokens: 5},
+		{ID: "u3", KeyID: "k3", OrgID: "other-org", Model: "gpt-4o", PromptTokens: 99},
 	}
 	store.mu.Unlock()
 
@@ -649,6 +651,9 @@ func TestAdminQueryUsage(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), "u1") {
 		t.Error("response should contain u1")
+	}
+	if strings.Contains(rec.Body.String(), "u3") {
+		t.Error("response should NOT contain cross-org record u3")
 	}
 
 	// Query cross-org -> 403.

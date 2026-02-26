@@ -19,6 +19,7 @@ import (
 type RouterService struct {
 	routeStore storage.RouteStore
 	cache      *otter.Cache[string, []ResolvedTarget]
+	ttlCache   *otter.Cache[string, time.Duration]
 }
 
 // NewRouterService returns a RouterService backed by the given route store.
@@ -27,7 +28,11 @@ func NewRouterService(routes storage.RouteStore) *RouterService {
 		MaximumSize:      256,
 		ExpiryCalculator: otter.ExpiryWriting[string, []ResolvedTarget](routeCacheTTL),
 	})
-	return &RouterService{routeStore: routes, cache: cache}
+	ttlCache := otter.Must(&otter.Options[string, time.Duration]{
+		MaximumSize:      256,
+		ExpiryCalculator: otter.ExpiryWriting[string, time.Duration](routeCacheTTL),
+	})
+	return &RouterService{routeStore: routes, cache: cache, ttlCache: ttlCache}
 }
 
 // routeCacheTTL is how long resolved targets stay cached before re-reading
@@ -83,11 +88,17 @@ func (rs *RouterService) ResolveModel(ctx context.Context, model string) ([]Reso
 }
 
 // CacheTTL returns the route-configured cache TTL for a model alias,
-// or 0 if no route or no TTL is configured.
+// or 0 if no route or no TTL is configured. Results are cached to avoid
+// per-request DB queries on cache-eligible requests.
 func (rs *RouterService) CacheTTL(ctx context.Context, model string) time.Duration {
-	route, err := rs.routeStore.GetRouteByAlias(ctx, model)
-	if err != nil || route.CacheTTLs <= 0 {
-		return 0
+	if ttl, ok := rs.ttlCache.GetIfPresent(model); ok {
+		return ttl
 	}
-	return time.Duration(route.CacheTTLs) * time.Second
+	var ttl time.Duration
+	route, err := rs.routeStore.GetRouteByAlias(ctx, model)
+	if err == nil && route.CacheTTLs > 0 {
+		ttl = time.Duration(route.CacheTTLs) * time.Second
+	}
+	rs.ttlCache.Set(model, ttl)
+	return ttl
 }

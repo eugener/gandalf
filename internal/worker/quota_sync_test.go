@@ -81,4 +81,10 @@ func TestQuotaSyncWorker_PreloadBudgets(t *testing.T) {
 	if !tracker.Check("budgeted-key", 10.0) {
 		t.Error("preloaded+synced key at 8/10 should be within budget")
 	}
+
+	// Consume additional cost to push over budget.
+	tracker.Consume("budgeted-key", 3.0)
+	if tracker.Check("budgeted-key", 10.0) {
+		t.Error("preloaded+synced key at 11/10 should be over budget")
+	}
 }

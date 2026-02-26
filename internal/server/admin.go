@@ -71,6 +71,57 @@ func parsePagination(r *http.Request) (offset, limit int) {
 	return
 }
 
+// resolveOrgID returns the org_id from the query string, defaulting to the
+// caller's org. Writes 403 and returns "" if the requested org differs.
+func resolveOrgID(w http.ResponseWriter, r *http.Request) (string, bool) {
+	identity := gateway.IdentityFromContext(r.Context())
+	orgID := r.URL.Query().Get("org_id")
+	if orgID == "" {
+		orgID = identity.OrgID
+	}
+	if orgID != identity.OrgID {
+		writeJSON(w, http.StatusForbidden, errorResponse("cannot access resources outside your organization"))
+		return "", false
+	}
+	return orgID, true
+}
+
+// parseSinceUntil validates optional since/until RFC3339 query params.
+// Writes 400 and returns false on invalid format.
+func parseSinceUntil(w http.ResponseWriter, r *http.Request) (since, until string, ok bool) {
+	q := r.URL.Query()
+	since, until = q.Get("since"), q.Get("until")
+	// Validate RFC3339 upfront: SQLite datetime() silently returns NULL on
+	// malformed strings, producing empty results instead of a clear error.
+	if since != "" {
+		if _, err := time.Parse(time.RFC3339, since); err != nil {
+			writeJSON(w, http.StatusBadRequest, errorResponse("invalid since format, use RFC3339"))
+			return "", "", false
+		}
+	}
+	if until != "" {
+		if _, err := time.Parse(time.RFC3339, until); err != nil {
+			writeJSON(w, http.StatusBadRequest, errorResponse("invalid until format, use RFC3339"))
+			return "", "", false
+		}
+	}
+	return since, until, true
+}
+
+// parseExpiresAt parses an optional RFC3339 expires_at string pointer.
+// Writes 400 and returns false on invalid format.
+func parseExpiresAt(w http.ResponseWriter, raw *string) (*time.Time, bool) {
+	if raw == nil {
+		return nil, true
+	}
+	t, err := time.Parse(time.RFC3339, *raw)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, errorResponse("invalid expires_at format"))
+		return nil, false
+	}
+	return &t, true
+}
+
 // --- Providers ---
 
 func (s *server) handleListProviders(w http.ResponseWriter, r *http.Request) {
@@ -166,13 +217,8 @@ type keyCreateResponse struct {
 }
 
 func (s *server) handleListKeys(w http.ResponseWriter, r *http.Request) {
-	identity := gateway.IdentityFromContext(r.Context())
-	orgID := r.URL.Query().Get("org_id")
-	if orgID == "" {
-		orgID = identity.OrgID
-	}
-	if orgID != identity.OrgID {
-		writeJSON(w, http.StatusForbidden, errorResponse("cannot access keys outside your organization"))
+	orgID, ok := resolveOrgID(w, r)
+	if !ok {
 		return
 	}
 	offset, limit := parsePagination(r)
@@ -211,14 +257,9 @@ func (s *server) handleCreateKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var expiresAt *time.Time
-	if req.ExpiresAt != nil {
-		t, err := time.Parse(time.RFC3339, *req.ExpiresAt)
-		if err != nil {
-			writeJSON(w, http.StatusBadRequest, errorResponse("invalid expires_at format"))
-			return
-		}
-		expiresAt = &t
+	expiresAt, ok := parseExpiresAt(w, req.ExpiresAt)
+	if !ok {
+		return
 	}
 
 	plaintext, key, err := s.deps.Keys.CreateKey(r.Context(), app.CreateKeyOpts{
@@ -307,12 +348,11 @@ func (s *server) handleUpdateKey(w http.ResponseWriter, r *http.Request) {
 		existing.MaxBudget = update.MaxBudget
 	}
 	if update.ExpiresAt != nil {
-		t, err := time.Parse(time.RFC3339, *update.ExpiresAt)
-		if err != nil {
-			writeJSON(w, http.StatusBadRequest, errorResponse("invalid expires_at format"))
+		expiresAt, ok := parseExpiresAt(w, update.ExpiresAt)
+		if !ok {
 			return
 		}
-		existing.ExpiresAt = &t
+		existing.ExpiresAt = expiresAt
 	}
 	if update.Blocked != nil {
 		existing.Blocked = *update.Blocked
@@ -321,6 +361,9 @@ func (s *server) handleUpdateKey(w http.ResponseWriter, r *http.Request) {
 	if err := s.deps.Store.UpdateKey(r.Context(), existing); err != nil {
 		writeAdminError(w, r, err)
 		return
+	}
+	if s.deps.KeyInvalidator != nil {
+		s.deps.KeyInvalidator.InvalidateByKeyID(id)
 	}
 	writeJSON(w, http.StatusOK, existing)
 }
@@ -340,6 +383,9 @@ func (s *server) handleDeleteKey(w http.ResponseWriter, r *http.Request) {
 	if err := s.deps.Store.DeleteKey(r.Context(), id); err != nil {
 		writeAdminError(w, r, err)
 		return
+	}
+	if s.deps.KeyInvalidator != nil {
+		s.deps.KeyInvalidator.InvalidateByKeyID(id)
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -430,31 +476,15 @@ func (s *server) handleCachePurge(w http.ResponseWriter, r *http.Request) {
 // --- Usage ---
 
 func (s *server) handleQueryUsage(w http.ResponseWriter, r *http.Request) {
-	identity := gateway.IdentityFromContext(r.Context())
-	q := r.URL.Query()
-	orgID := q.Get("org_id")
-	if orgID == "" {
-		orgID = identity.OrgID
-	}
-	if orgID != identity.OrgID {
-		writeJSON(w, http.StatusForbidden, errorResponse("cannot access usage outside your organization"))
+	orgID, ok := resolveOrgID(w, r)
+	if !ok {
 		return
 	}
-	// Validate RFC3339 upfront: SQLite datetime() silently returns NULL on
-	// malformed strings, producing empty results instead of a clear error.
-	since, until := q.Get("since"), q.Get("until")
-	if since != "" {
-		if _, err := time.Parse(time.RFC3339, since); err != nil {
-			writeJSON(w, http.StatusBadRequest, errorResponse("invalid since format, use RFC3339"))
-			return
-		}
+	since, until, ok := parseSinceUntil(w, r)
+	if !ok {
+		return
 	}
-	if until != "" {
-		if _, err := time.Parse(time.RFC3339, until); err != nil {
-			writeJSON(w, http.StatusBadRequest, errorResponse("invalid until format, use RFC3339"))
-			return
-		}
-	}
+	q := r.URL.Query()
 	offset, limit := parsePagination(r)
 	filter := gateway.UsageFilter{
 		OrgID:  orgID,
@@ -481,31 +511,15 @@ func (s *server) handleQueryUsage(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) handleUsageSummary(w http.ResponseWriter, r *http.Request) {
-	identity := gateway.IdentityFromContext(r.Context())
-	q := r.URL.Query()
-	orgID := q.Get("org_id")
-	if orgID == "" {
-		orgID = identity.OrgID
-	}
-	if orgID != identity.OrgID {
-		writeJSON(w, http.StatusForbidden, errorResponse("cannot access usage outside your organization"))
+	orgID, ok := resolveOrgID(w, r)
+	if !ok {
 		return
 	}
-	// Validate RFC3339 upfront: SQLite datetime() silently returns NULL on
-	// malformed strings, producing empty results instead of a clear error.
-	since, until := q.Get("since"), q.Get("until")
-	if since != "" {
-		if _, err := time.Parse(time.RFC3339, since); err != nil {
-			writeJSON(w, http.StatusBadRequest, errorResponse("invalid since format, use RFC3339"))
-			return
-		}
+	since, until, ok := parseSinceUntil(w, r)
+	if !ok {
+		return
 	}
-	if until != "" {
-		if _, err := time.Parse(time.RFC3339, until); err != nil {
-			writeJSON(w, http.StatusBadRequest, errorResponse("invalid until format, use RFC3339"))
-			return
-		}
-	}
+	q := r.URL.Query()
 	filter := gateway.RollupFilter{
 		OrgID:  orgID,
 		KeyID:  q.Get("key_id"),

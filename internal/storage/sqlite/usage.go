@@ -175,6 +175,32 @@ func (s *Store) UpsertRollup(ctx context.Context, rollups []gateway.UsageRollup)
 
 // QueryRollups returns rollups matching the filter.
 func (s *Store) QueryRollups(ctx context.Context, f gateway.RollupFilter) ([]gateway.UsageRollup, error) {
+	where, args := rollupWhere(f)
+
+	rows, err := s.read.QueryContext(ctx,
+		`SELECT org_id, key_id, model, period, bucket,
+		 request_count, prompt_tokens, completion_tokens, total_tokens, cost_usd, cached_count
+		 FROM usage_rollups`+where+` ORDER BY bucket DESC`, args...,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []gateway.UsageRollup
+	for rows.Next() {
+		var r gateway.UsageRollup
+		err := rows.Scan(&r.OrgID, &r.KeyID, &r.Model, &r.Period, &r.Bucket,
+			&r.RequestCount, &r.PromptTokens, &r.CompletionTokens, &r.TotalTokens, &r.CostUSD, &r.CachedCount)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+func rollupWhere(f gateway.RollupFilter) (string, []any) {
 	var clauses []string
 	var args []any
 	if f.OrgID != "" {
@@ -201,30 +227,8 @@ func (s *Store) QueryRollups(ctx context.Context, f gateway.RollupFilter) ([]gat
 		clauses = append(clauses, "bucket < ?")
 		args = append(args, f.Until)
 	}
-	where := ""
-	if len(clauses) > 0 {
-		where = " WHERE " + strings.Join(clauses, " AND ")
+	if len(clauses) == 0 {
+		return "", nil
 	}
-
-	rows, err := s.read.QueryContext(ctx,
-		`SELECT org_id, key_id, model, period, bucket,
-		 request_count, prompt_tokens, completion_tokens, total_tokens, cost_usd, cached_count
-		 FROM usage_rollups`+where+` ORDER BY bucket DESC`, args...,
-	)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var out []gateway.UsageRollup
-	for rows.Next() {
-		var r gateway.UsageRollup
-		err := rows.Scan(&r.OrgID, &r.KeyID, &r.Model, &r.Period, &r.Bucket,
-			&r.RequestCount, &r.PromptTokens, &r.CompletionTokens, &r.TotalTokens, &r.CostUSD, &r.CachedCount)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, r)
-	}
-	return out, rows.Err()
+	return " WHERE " + strings.Join(clauses, " AND "), args
 }
