@@ -1,0 +1,34 @@
+version: "2"
+
+run:
+  timeout: 5m
+
+linters:
+  default: standard
+  enable:
+    - bodyclose
+    - misspell
+    - usestdlibvars
+  settings:
+    errcheck:
+      exclude-functions:
+        - (io.Closer).Close
+        - (*database/sql.DB).Close
+        - (*database/sql.Rows).Close
+        - (*database/sql.Stmt).Close
+        - (net/http.ResponseWriter).Write
+        - io.WriteString
+        - fmt.Fprint
+        - fmt.Fprintf
+        - fmt.Fprintln
+        - (*encoding/json.Encoder).Encode
+        - (*encoding/json.Decoder).Decode
+    staticcheck:
+      checks:
+        - "all"
+        - "-QF*"
+
+  exclusions:
+    rules:
+      - linters: [errcheck, bodyclose]
+        path: _test\.go

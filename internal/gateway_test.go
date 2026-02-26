@@ -37,7 +37,7 @@ func TestHashKey(t *testing.T) {
 
 	t.Run("deterministic", func(t *testing.T) {
 		t.Parallel()
-		if HashKey("key") != HashKey("key") {
+		if HashKey("key") != HashKey("key") { //nolint:staticcheck // intentional: testing determinism
 			t.Error("HashKey is not deterministic")
 		}
 	})

@@ -53,7 +53,7 @@ func run(configPath string) error {
 	if err != nil {
 		return err
 	}
-	defer store.Close()
+	defer store.Close() //nolint:errcheck // best-effort cleanup
 
 	dsnLog := cfg.Database.DSN
 	if i := strings.IndexByte(dsnLog, '?'); i >= 0 {
