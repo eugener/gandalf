@@ -14,16 +14,14 @@
 With `GOEXPERIMENT=jsonv2` (set in Makefile):
 
 ```
-ChatCompletion:       ~54 allocs/op  ~4.9us
-ChatCompletionStream: ~53 allocs/op  ~4.7us
-Healthz:              ~25 allocs/op  ~2.2us
+ChatCompletion:       ~41 allocs/op  ~4.6us
+ChatCompletionStream: ~44 allocs/op  ~4.7us
+Healthz:              ~25 allocs/op  ~2.3us
 ```
-
-+1 alloc vs pre-security-hardening baseline from `http.MaxBytesReader` body size limit (OOM protection).
 
 Without jsonv2: ChatCompletion ~55, Stream ~60.
 
-Remaining ~18 allocs from `encoding/json` (request decode + response encode). Only reducible via `easyjson` codegen or waiting for json/v2 to graduate from experiment.
+Key: avoid generics on hot paths (Go shape dictionary + closure = +1 alloc/op). Use concrete `any` parameter or inline loops instead.
 
 CPU profile shows 96% of time in runtime (GC + scheduling), only 4% in application code. Alloc reduction IS the throughput optimization.
 

@@ -73,6 +73,26 @@ API keys require `gnd_` prefix. Set via `GANDALF_ADMIN_KEY` env var. Delete `gan
 | `golang.org/x/oauth2` | GCP OAuth2 ADC for Vertex AI cloud auth |
 | `aws/aws-sdk-go-v2` | AWS SigV4 signing, credential chain, event stream for Bedrock |
 
+## Performance Rules
+
+Every change to `internal/server/` or `internal/app/` hot paths must preserve alloc counts. Run `make bench` before and after; if allocs/op increase, fix before committing. Current baseline (with `GOEXPERIMENT=jsonv2`):
+
+```
+ChatCompletion:       41 allocs/op
+ChatCompletionStream: 44 allocs/op
+Healthz:              25 allocs/op
+```
+
+Known pitfalls on hot paths:
+- **No Go generics**: shape dictionary + closure causes +1 alloc/op. Use concrete `any` params or inline loops instead
+- **No closures in failover loops**: each closure literal is a heap alloc. Use method calls or helper functions with explicit params
+- **No `slog.Info`/`slog.Error`**: boxes every arg into `any`. Use `slog.LogAttrs` with typed attrs (`slog.String`, `slog.Int`)
+- **No `Header.Set`/`Header.Get`**: creates `[]string{v}` each call. Use direct map access (`w.Header()["Key"] = preAllocSlice`)
+- **Pool buffers**: use `bodyPool` (sync.Pool) for request body reads, not `json.NewDecoder` (cannot be pooled)
+- **Lazy tickers**: defer `time.NewTicker` until first use (saves ~3 allocs on short streams)
+
+See [docs/performance.md](docs/performance.md) for full optimization history.
+
 ## Conventions
 
 - Interfaces defined at consumer, not alongside implementation
