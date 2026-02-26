@@ -1,5 +1,11 @@
 # Gandalf
 
+[![CI](https://github.com/eugener/gandalf/actions/workflows/ci.yml/badge.svg)](https://github.com/eugener/gandalf/actions/workflows/ci.yml)
+[![Coverage](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/eugener/gandalf/badges/.badges/coverage.json)](https://github.com/eugener/gandalf/actions/workflows/ci.yml)
+[![Go Report Card](https://goreportcard.com/badge/github.com/eugener/gandalf)](https://goreportcard.com/report/github.com/eugener/gandalf)
+[![Go Version](https://img.shields.io/github/go-mod/go-version/eugener/gandalf)](https://go.dev/)
+[![License](https://img.shields.io/github/license/eugener/gandalf)](LICENSE)
+
 LLM gateway that sits between your applications and LLM providers, adding authentication, routing, rate limiting, caching, and observability.
 
 ## Features

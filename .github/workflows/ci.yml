@@ -1,0 +1,70 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: write
+
+env:
+  GOEXPERIMENT: jsonv2
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: Build
+        run: go build ./...
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test
+        run: go test -race -coverprofile=coverage.out -covermode=atomic ./...
+
+      - name: Extract coverage
+        id: coverage
+        run: |
+          COV=$(go tool cover -func=coverage.out | grep '^total:' | awk '{print $3}' | tr -d '%')
+          echo "percent=$COV" >> "$GITHUB_OUTPUT"
+          if [ "$(echo "$COV >= 80" | bc)" -eq 1 ]; then
+            echo "color=brightgreen" >> "$GITHUB_OUTPUT"
+          elif [ "$(echo "$COV >= 70" | bc)" -eq 1 ]; then
+            echo "color=green" >> "$GITHUB_OUTPUT"
+          elif [ "$(echo "$COV >= 60" | bc)" -eq 1 ]; then
+            echo "color=yellowgreen" >> "$GITHUB_OUTPUT"
+          elif [ "$(echo "$COV >= 50" | bc)" -eq 1 ]; then
+            echo "color=yellow" >> "$GITHUB_OUTPUT"
+          else
+            echo "color=red" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Push coverage badge
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        env:
+          COV: ${{ steps.coverage.outputs.percent }}
+          COLOR: ${{ steps.coverage.outputs.color }}
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          BADGE="{\"schemaVersion\":1,\"label\":\"coverage\",\"message\":\"${COV}%\",\"color\":\"${COLOR}\"}"
+          TMPDIR=$(mktemp -d)
+          cd "$TMPDIR"
+          git init
+          git remote add origin "https://x-access-token:${GH_TOKEN}@github.com/${GH_REPO}.git"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch origin badges 2>/dev/null && git checkout badges || git checkout --orphan badges
+          mkdir -p .badges
+          echo "$BADGE" > .badges/coverage.json
+          git add .badges/coverage.json
+          git diff --cached --quiet || git commit -m "coverage: ${COV}%"
+          git push origin badges
