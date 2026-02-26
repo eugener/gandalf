@@ -44,4 +44,4 @@ coverage:
 	go tool cover -html=coverage.out
 
 docker:
-	docker build -f deploy/Dockerfile -t $(BINARY):$(VERSION) .
+	docker build -f deploy/Dockerfile --build-arg VERSION=$(VERSION) -t $(BINARY):$(VERSION) .

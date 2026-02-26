@@ -1,0 +1,15 @@
+.git
+.github
+.claude
+bin
+coverage.out
+*.db
+*.db-wal
+*.db-shm
+deploy
+docs
+configs
+LICENSE
+README.md
+CLAUDE.md
+Makefile
