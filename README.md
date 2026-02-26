@@ -78,6 +78,14 @@ LLM gateway that sits between your applications and LLM providers, adding authen
 - [ ] PostgreSQL storage backend
 - [ ] mTLS support
 
+### Horizontal Scaling (Planned)
+- [ ] PostgreSQL backend for shared state (prereq)
+- [ ] Redis for centralized rate limits and quota counters
+- [ ] Redis response cache backend (replace per-process W-TinyLFU for multi-instance)
+- [ ] Stateless hot path (move all mutable state to PG/Redis)
+- [ ] Usage recording via shared queue (Redis streams or direct PG writes)
+- [ ] Kubernetes-ready: liveness/readiness probes (done), Helm chart, HPA guidance
+
 ## Quick Start
 
 ```bash
